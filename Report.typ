@@ -1,0 +1,2386 @@
+#import "@preview/grape-suite:3.1.0": subtype
+
+#show figure.where(
+  kind: table
+): set figure.caption(position: top)
+
+#show: subtype.essay.with(
+    title: "Differential expression analysis of C.elegans",
+    university: [Université Libre de Bruxelles],
+    institute: [Msc, Biology of organism and ecology],
+    seminar: [Report],
+    semester: [Q1],
+    docent: [000453032],
+    author: [Clément Delférière],
+    date: [5#super[th] January 2026],
+)
+This project is inspired by several GitHub projects on RNA-seq differential expression analysis and focuses on understanding the principles of the different methods and comparing the results. Since we have no replicates, we focused on explenatory analysis of the data structure.
+  
+= RNA Data Query 
+The query of the data from the Ensembl website was persformed by querying the JSON file of the search page. This file gave us the necessary information to query the JSON page of each experiment and then query the 1 and 2 paired-end RNA. We saved each JSON file if futher futur information is needed. Then proceed whit the download of all the RNA sequences, whit the writing of [experience code|accession|R1/R2|replicat|URL] metadata table in a .tsv file.
+
+= RNA quality metrics by accession
+For the quality metrics by accession, FastQC was used, followed by MultiQC to aggregate all experiments results. MultiQC summarize the duplication rates, GC content, number of total sequences for each timepoints. Sequence Quality Score were compute and analysed. Top overrepresented sequences in reads were compute, and all of our reads add a poly-G motif. This motif can emerged when there is no fluorescent signal during sequencing (default is G). So we decided to trim this sequences. Additionaly we removed reads which 40% of bases had a Qscore below 20. Reads whit less than 50 bases were not conserved, adapter if identified were removed, all performed by fastp.
+
+= Alignment, mapping and pseudo-alignment
+== Hisat2/star
+HISAT2 (Hierarchical Indexing for Spliced Alignment of Transcripts) and STAR (Spliced Transcripts Alignment to a Reference) both align RNA-seq reads to a reference genome, both are aware of the presence of splice junctions in RNA.
+
+HISAT2 uses a graph-based FM index (end to end graph), first it seek a corresponding genomic region whit a broad global index and then seek the corresponding matching sequence whit narrow local indexes of those regions. It provides fast spliced alignment.
+
+STAR relies on a matching sequences strategy called "seeds" using large genome index. Seeds are sequences of X bases of a read, once a perfect match is found, the rest of the read is tested base-by-base. 
+
+== Integrative Genomics Viewer (IGV)
+IGV is used for visual inspection of alignment files (BAM) mapped to a reference genome. It allows visualization of reads coverage, exon-intron structures, and splice junctions across genomic loci.
+== Salmon
+Salmon does not perform alignment of RNA-seq reads to the reference genome. Instead, it uses a pseudo-alignment strategy that assigns reads to compatible transcripts without computing base-by-base alignments. This approach bypasses splice junctions determination and genomic coordinates. Salmon determines which transcripts could have generated each read based on shared sequence content.
+
+Because pseudo-alignment does not produce genomic alignments, Salmon does not generate BAM/SAM files that can be interpreted. However, for expression quantification of known transcripts, pseudo-alignment provides estimates that are highly consistent with alignment-based methods while being computationally more efficient.
+
+= Charge the align countigs in R
+RNA-seq quantifications obtained with Salmon are first converted to gene-level. Transcript identifiers from the GTF annotation are mapped to gene identifiers using a transcript-to-gene (tx2gene) table, allowing aggregation of transcript-level estimates at the gene level. Since salmon give abundances we have to estimate raw count from them, prior to any modeling, using tximport. Then correcting for transcript length using length-scaled TPMs.
+
+Sample metadata are then converted into a structured coldata object defining experimental conditions and sample grouping.   This step ensures that estimated counts remain comparable across samples and genes.
+
+A DESeq2 dataset (dds) and DGEListe-basesd (dge) are built from the imported counts and sample metadata, leveled whit timepoints of interest.
+
+== models used
+=== negative binomial distribution (NB)
+The NB distribution used in RNA-seq is equivalent to a Poisson-Gamma model: read counts follow a Poisson distribution proportional to an expression rate, and this rate varies between samples according to a Gamma distribution in order to capture biological variability. The combination of these two distributions results in a negative binomial distribution, with
+$ "Var"(Y)=#sym.mu + #sym.Phi (#sym.mu)^2 $
+
+DESeq2 and edgeR are based on this distribution. EdgeR first estimates a common dispersion across genes and then refines it to obtain gene's dispersions, whereas DESeq2 first estimates dispersions for each gene and shrinks them toward a mean-dispersion trend.
+=== linear model
+Limma-voom, does not model counts directly with a NB distribution. Instead, raw counts are transformed into log-counts per million (log-CPM), and the mean-variance relationship is estimated to compute weights for each observation. These weights allow the use of linear models with normally distributed errors while accounting for the heteroscedasticity inherent to RNA-seq count data.
+
+== 900min vs 510min analysis
+=== $log_2$ FoldChange (logFC)
+The logFC is define as the slope of the linear equation of each gene, in a given model. It is used to show differences in expressions between two conditions, here timepoints.
+
+$ log_2("FC")= log_2((t_900min +1) / (t_510min +1)) = log_2(t_900min +1) - log_2(t_900min +1) $
+
+$ Y_"gi" = X_i#sym.beta _"g" + #sym.epsilon _"gi" " for g genes in i samples" $
+
+These logFC can be visualized raw in a barplots, or in a volcano plots where the logFC score is plotted against the p-value, corrected whit Benjamini-Hochberg (also seen as False discovery rate, FDR). The p-value here is the likelihood that the observed changes occured by chance under null hypothesis.
+
+== whole timepoint analysis
+=== PCA & ward's clustering analysis
+We first did a PCA analysis, to identify the main axes which give the largest variance in gene expression across samples. In our case, it's showing the gene-space that best separates the timepoints based on there expression dynamics.
+
+The Ward's hierarichical clustering will form groups of samples (here timepoints) that minimize the variance within each cluster to differentiate groups whit the same expression trend. 
+
+//"Ward D2 uses the sum of squared differences from the centroid as the criterion to minimize when merging clusters, which is equivalent to minimizing the increase in the sum of squared deviations from the centroid of the combined cluster"
+=== genes trajectories analysis
+Another way is to visualized our normalized gene expression as a continuous lines accross timepoints, and separate trending genes based on visual arbitrary treshold.
+
+=== heatmap top 500 genes
+Finaly for an overview of the relative expression patterns a heatmap of the normalized counts were realized, and ordered following a ward's clustering, for both genes and samples. This approach group timepoints and genes whit similar expression patterns. 
+Data can normalized futher whith z-score transformation, this lessen the impact of overexpress genes wich give more importance to medium to low expression genes variations by highlings the relative deviations from the means : 
+//https://sitandr.github.io/typst-examples-book/book/basics/special_symbols.html
+#let just-xbar = move(dy: -0.08em, strike(offset: -0.65em, extent: -0.05em, "x"))
+#let xbar = (sym.wj, just-xbar, sym.wj).join()
+
+$ Z_"gi" = (x_"gi" - xbar_"g")/ #sym.sigma _"g"  " for g genes in i samples" $
+
+= Discussion
+
+Our 14 Dataset (one for each timepoints) are on average of good quality whit no obvious contamination (fig.2). We could considered four outliers (t870min and t780min) with greater differences, whit the average, in sequence counts than the others. After trimming, around 92% of reads on average were preserved. STAR alignment gave the most mapped reads whit the longest insert size, followed by HISAT2 then salmon. IGV plot shows similar pattern along the genome. For the R analysis salmon quantification was used. 
+
+For the two time points analysis, four methods to compute logFC between 510min and 900min were used. The barplots and volcanoplots shows slight quantitative differences between models, but whit consistent overall trends. 60% differentialy expresed genes (DEG) were common between models, 72% between edgeR and limma, DESeq2 were more permissive and identified 25% more than the two other models.
+
+Whole timepoints analysis focused on variance analysis, the first two principal components of the PCA showed two main temporal trends in expressed genes (based on logCPM), explaining 58.8% of  the variance. Up to 65.8%, if we had the third principal components, that show a different pattern of differentiation. Ward's clustering were computed for four clusters, which were consistent whit the PCA. Another approach were to visualized each genes has a curved line trajectory along timepoints, limited to the first 100 then 500 most variable genes. We could then identified visual timepoints thresholds seperating expression patterns. Whit Limited succes due to genes ponctualy expressed and oscillating expression. Finally correlation heatmaps were computed to identify timepoint sharing similar trend in expression dynamics, combined whit a ward's clusterings. Small correlated groups were identified, which would indicate shared  trend in expressed genes. After normalizing gene expression relative to the gene's mean, the patterns were clearer. One group whit a strong negative correlation between 900 minutes to 720 minutes, indicating oppposite trend in expression dynamics accross samples. And a second smaller group from 510 minute to 570 minutes whit a strong positive correlation, showing common trend in expression dynamics. 
+
+#pagebreak()
+= Annexes
+== RNA quality metrics by accession, before trimming
+#figure(  
+  image("/Results/qc/multiqc/svgviewer/violonplot.svg", width: 100%),
+  caption: [ fastQC general statistic summary whit multiQC, before trimming ; violon plot first line to last : percentage of duplicate reads, average percentage of GC contente per reads, total séquences (million) ]
+)
+
+#figure(  
+  image("/Results/qc/multiqc/svgviewer/fastqc_per_sequence_gc_content_plot.svg", width: 95%),
+  caption: [ fastQC per sequence percentage of GC content whit multiQC, before trimming ; GC content across the whole length of each sequence agaisn't a normal distribution of GC content ]
+)
+
+#figure(  
+  image("/Results/qc/multiqc/svgviewer/fastqc_per_sequence_quality_scores_plot.svg", width: 95%),
+  caption: [ fastQC per sequence Quality Score whit multiQC, before trimming ; means sequence's quality score agaisn't number of counts whit given quality score ]
+)
+
+== RNA quality metrics by accession, after trimming
+#figure(  
+  image("/Results/qc/fastp/multiqc_clean/svgviewer/fastp_filtered_reads_plot.svg", width: 88%),
+  caption: [ fastp sequences that remains after filtering whit multiQC, after trimming ; cf. legend for explanation on the filtering used ]
+)
+
+#figure(  
+  image("/Results/qc/fastp/multiqc_clean/svgviewer/fastqc_per_sequence_gc_content_plot.svg", width: 88%),
+  caption: [ fastQC per sequence percentage of GC content whit multiQC, after trimming ; GC content across the whole length of each sequence agaisn't a normal distribution of GC content ]
+)
+
+#figure(  
+  image("/Results/qc/fastp/multiqc_clean/svgviewer/fastqc_per_sequence_quality_scores_plot.svg", width: 88%),
+  caption: [ fastQC per sequence Quality Score whit multiQC, before trimming ; means sequence's quality score agaisn't number of counts whit given quality score ]
+)
+
+== Alignment quality metrics by accession
+=== STAR
+#figure(  
+  image("Results/quants/STAR/multiqc/svgviewer/star_alignment_plot.svg", width: 87%),
+  caption: [ STAR mapped metrics per accession whit number of given reads ; cf. legend for explanation ]
+)
+
+#figure(  
+  image("Results/quants/STAR/multiqc/svgviewer/qualimap_gene_coverage_profile.svg", width: 87%),
+  caption: [ Qualimap-RNAseq coverage profile along genes ; cumulative mapped- read depth along transcript position 5'$->$3']
+)
+
+#figure(  
+  image("Results/quants/STAR/multiqc/svgviewer/qualimap_insert_size.svg", width: 87%),
+  caption: [ Qualimap-BamQC insert size histogram ; average size of after paired-end joining, with a narrow spread indicating highly consistent fragment lengths.]
+)
+
+#figure(  
+  image("Results/quants/STAR/t_510min/t_510min-rnaseq-qualimap-report/images_qualimapReport/Reads Genomic Origin.png", width: 90%),
+  caption: [ Qualimap-RNAseq genomic origin of the assembled insert for t510min ; cf. legend for explanation ]
+)
+
+#pagebreak()
+#rotate( -90deg, reflow:true,
+  figure(  
+    image("Results/IGV/trimmed_fastq/STAR_trimmed.svg", width: 100%),
+    caption: [ view whit IGV of STAR alignment on genome ]
+  )
+)
+=== HISAT2
+#figure(  
+  image("Results/quants/HISAT2/multiqc/svgviewer/bowtie2_pe_plot.svg", width: 90%),
+  caption: [ BOWTIE2 paired-end alignment Scores per accession whit number of given reads ; cf. legend for explanation ]
+)
+
+#figure(  
+  image("Results/quants/HISAT2/multiqc/svgviewer/qualimap_gene_coverage_profile.svg", width: 90%),
+  caption: [ Qualimap-RNAseq coverage profile along genes ; cumulative mapped- read depth along transcript position 5'$->$3']
+)
+
+#figure(  
+  image("Results/quants/HISAT2/multiqc/svgviewer/qualimap_insert_size.svg", width: 90%),
+  caption: [ Qualimap-BamQC insert size histogram ; average size of after paired-end joining, with a narrow spread indicating highly consistent fragment lengths.]
+)
+
+#figure(  
+  image("Results/quants/HISAT2/t_510min/t_510min-rnaseq-qualimap-report/images_qualimapReport/Reads Genomic Origin.png", width: 90%),
+  caption: [ Qualimap-RNAseq genomic origin of the assembled insert ; cf. legend for explanation ]
+)
+
+#pagebreak()
+#rotate( -90deg, reflow:true,
+  figure(  
+    image("Results/IGV/trimmed_fastq/HISAT_trimmed.svg", width: 100%),
+    caption: [ view whit IGV of HISAT2 alignment on genome ]
+  )
+)
+
+=== SALMON
+#figure(  
+  image("Results/quants/salmon/multiqc/svgviewer/salmon_plot.svg", width: 90%),
+  caption: [ Salmon fragment size distribution ; fraction of fragment length whit given size ]
+)
+=== comparaison
+#figure( 
+  table(
+    columns: 4,
+    stroke: (x: none),
+    row-gutter: (2.2pt, auto),
+    table.header[algorithm][average mapped\ reads][average, median\ insert size][average, means\ GC content],
+    [Star], [97%], [300bp], [46%],
+    [HISAT2], [94%], [265bp], [46%],
+    [SALMON], [84%], [250bp], [not computed],
+  ),
+caption:[comparaison of mapped reads, median insert size and GC content on average between reads, between accession]
+)
+#pagebreak()
+
+== Two timepoints analysis
+#columns(3)[
+#figure(  
+  image("Results/DESeqDataSet/barplot/DESeq2_sim/log2FoldChange_>=|4|_genes_histogram_DESeq2.pdf", width: 30%),
+  caption: [ LogFC barplot DESeq2 ]
+)
+#colbreak()
+#figure(  
+  image("Results/DGElist/barplot/glmQLF/logFC_>=|4|_genes_histogram_edgeR_glmQLF.pdf", width: 30%),
+  caption: [ LogFC barplot edgeR ]
+)
+#colbreak()
+#figure(  
+  image("Results/DGElist/barplot/limma/logFC_>=|4|_genes_histogram_limma_logFC.pdf", width: 30%),
+  caption: [ LogFC barplot limma ]
+)
+]
+
+=== volcanoplot
+#figure(  
+  image("Results/DESeqDataSet/volcanoplot/volcano_DESeq2_sim.pdf", width: 88%),
+  caption: [ LogFC volcanoplot DESeq2 ]
+)
+
+#figure(  
+  image("Results/DGElist/volcanoplot/volcano_glmQLF_sim.pdf", width: 88%),
+  caption: [ LogFC barplot edgeR ]
+)
+
+#figure(  
+  image("Results/DGElist/volcanoplot/volcano_limma_sim.pdf", width: 90%),
+  caption: [ LogFC barplot limma ]
+)
+
+=== comparaison
+#let moore = csv("Results/DGElist/paper_table.csv")
+#figure(
+  table(
+     columns: 5,
+     ..moore.map(m => m.slice(1, 6)).flatten()
+  ),
+  caption: [ logFC comparaison ]
+)
+
+#figure(  
+  image("Results/DGElist/venndiagram/VennDiagram.pdf", width: 100%),
+  caption: [ venndiagram of common differential expressed genes between models ]
+)
+
+== Whole timepoints analysis
+=== PCA & ward hierarchical clustering
+#figure(  
+  image("Results/DGElist/pca/PCA_timepoints_ward_clusters.pdf", width: 90%),
+  caption: [ PCA of timepoints whit colored ward clustering (2 axis)]
+)
+
+#figure(  
+  image("Results/DGElist/pca/PCA3_timepoints_ward_clusters.pdf", width: 90%),
+  caption: [ PCA of timepoints whit colored ward clustering (3 axis) ]
+)
+
+#figure(  
+  image("Results/DGElist/pca/ward_clustering.pdf", width: 90%),
+  caption: [ dendrogramme of the ward's clustering used in the PCA ]
+)
+
+=== Trajectory analysis
+#figure(  
+  image("Results/DGElist/trajectoryplot/top100_trajectories.pdf", width: 100%),
+  caption: [ visualization of the top100 variable genes along the 14 timepoints ]
+)
+
+#figure(  
+  image("Results/DGElist/trajectoryplot/top500_trajectories_t900_high.pdf", width: 100%),
+  caption: [ visualization of the top500 variable genes along the 14 timepoints, minus genes were logCPM < 6 at 900 minutes ]
+)
+
+#figure(  
+  image("Results/DGElist/trajectoryplot/top500_trajectories_t900_low.pdf", width: 100%),
+  caption: [ visualization of the top500 variable genes along the 14 timepoints, minus genes were logCPM >= 6 at 900 minutes ]
+)
+
+#figure(  
+  image("Results/DGElist/trajectoryplot/top500_trajectories_t900low_t510high.pdf", width: 100%),
+  caption: [ visualization of the top500 variable genes along the 14 timepoints, minus genes were logCPM >= 6 at 900 minutes and logCPM < 6 at 510 minutes ]
+)
+
+#figure(  
+  image("Results/DGElist/trajectoryplot/top500_trajectories_t900low_t510low.pdf", width: 100%),
+  caption: [ visualization of the top500 variable genes along the 14 timepoints, minus genes were logCPM >= 6 at 900 minutes and logCPM >= 6 at 510 minutes ]
+)
+
+#pagebreak()
+
+=== heatmaps
+#figure(  
+  image("Results/DGElist/heatmap/timepoint_correlation.pdf", width: 85%),
+  caption: [ heatmap whit ward's clustering of the trending correlation of logCPM per timepoints ]
+)
+
+#figure(  
+  image("Results/DGElist/heatmap/timepoint_zcorrelation.pdf", width: 85%),
+  caption: [ heatmap whit ward's clustering of the trending correlation of z-score normalized logCPM per timepoints ]
+)
+
+#figure(  
+  image("Results/DGElist/heatmap/heatmap_top_variable_genes.pdf", width: 100%),
+  caption: [ heatmap whit ward's clustering of the trending correlation of z-score normalized logCPM per timepoints agaisn't the trending correlation of genes's z-score normalized logCPM ]
+)
+
+#pagebreak()
+= Documentations :
+
+== Books : 
+- Lovric, Miodrag. International Encyclopedia of Statistical Science. Springer Berlin Heidelberg Springer e-books Imprint Springer, 2011. Mathematics and Statistics (Springer-11649). p1094-1096 ; p429-430
+
+- Maclean, Dan. R Bioinformatics Cookbook: Use R and Bioconductor to Perform RNAseq, Genomics, Data Visualization, and Bioinformatic Analysis. 1re éd., Packt Publishing Limited, 2019.
+
+- Legendre, Pierre, et Louis Legendre. Numerical Ecology. 3d English edition, Elsevier, 2012. Developments in Environmental Modelling 24.
+
+- Picardi, Ernesto, éditeur. RNA Bioinformatics. Second edition, Corrected publication, Humana Press, 2021. Methods in Molecular Biology 2284.
+
+== fastqc/multiqc :
+- https://genomicsaotearoa.github.io/RNA-seq-workshop/3_trimmingfiltering/
+- https://www.bioinformatics.babraham.ac.uk/training/Sequence_QC_Course/Sequencing%20Quality%20Control.pdf
+- https://genomicsaotearoa.github.io/RNA-seq-workshop/3_trimmingfiltering/
+
+== fatp trimming :
+- https://speciationgenomics.github.io/fastp/
+- https://github.com/OpenGene/fastp
+- https://www.biostars.org/p/9575709/
+
+== CIGAR :
+- https://jef.works/blog/2017/03/28/CIGAR-strings-for-dummies/
+
+== RSubread counting (que tu découvres 2 jours avant la remise du projet et que tu pensais pas possible d'après ce que tu avais lu sur bwa, snif)
+- https://bookdown.org/goknurginer/Analysing-CRISPR-screens-with-edgeR/counting-the-sgrnas-with-rsubread.html
+
+== rappel string graph FM-index : 
+- Simpson, Jared T., et Richard Durbin. « Efficient construction of an assembly string graph using the FM-index ». Bioinformatics, vol. 26, no 12, juin 2010, p. i367-73. PubMed Central, https://doi.org/10.1093/bioinformatics/btq217.
+
+== HISAT : 
+- Kim, Daehwan, et al. « HISAT: A Fast Spliced Aligner with Low Memory Requirements ». Nature Methods, vol. 12, no 4, avril 2015, p. 357-60. PubMed, https://doi.org/10.1038/nmeth.3317.
+- Kim, Daehwan, et al. « Graph-Based Genome Alignment and Genotyping with HISAT2 and HISAT-genotype ». Nature biotechnology, vol. 37, no 8, août 2019, p. 907-15. PubMed Central, https://doi.org/10.1038/s41587-019-0201-4.
+
+== STAR : 
+- Dobin, Alexander, et al. « STAR: ultrafast universal RNA-seq aligner ». Bioinformatics, vol. 29, no 1, janvier 2013, p. 15-21. PubMed Central, https://doi.org/10.1093/bioinformatics/bts635.
+
+== HISAT/STAR comparaison : 
+- Bianchi, Andrea, et al. « Comparing HISAT and STAR-based pipelines for RNA-Seq Data Analysis: a real experience ». 2023 IEEE 36th International Symposium on Computer-Based Medical Systems (CBMS) [L'Aquila, Italy], 2023, p. 218-24. DOI.org (Crossref), https://doi.org/10.1109/CBMS58004.2023.00220.
+- https://www.biostars.org/p/288726/
+
+== deeptools::ComputeGCBiais :
+- https://deeptools.readthedocs.io/en/develop/content/tools/computeGCBias.html
+
+== deeptools::correctGCBias : 
+- https://deeptools.readthedocs.io/en/develop/content/tools/correctGCBias.html
+
+== Salmon :
+- https://salmon.readthedocs.io/en/latest/salmon.html#using-salmon
+- https://salmon.readthedocs.io/en/latest/salmon.html#quantifying-in-mapping-based-mode
+- https://learn.gencore.bio.nyu.edu/rna-seq-analysis/salmon-kallisto-rapid-transcript-quantification-for-rna-seq-data/
+
+== Normalization techniques :
+- https://www.biostars.org/p/462968/
+
+== Negative binomial law | Gamma law | Poisson law
+- https://r.qcbs.ca/workshop07/book-fr/glmm-binomiale-n%C3%A9gative.html
+- https://bookdown.org/boucherjphilippe/ACT5400/poisson-gamma.html
+- https://www.biostars.org/p/84445/
+- https://timothy-barry.github.io/posts/2020-06-16-gamma-poisson-nb/
+
+== DESeq2 model:
+- Love, Michael I., et al. « Moderated Estimation of Fold Change and Dispersion for RNA-Seq Data with DESeq2 ». Genome Biology, vol. 15, no 12, 2014, p. 550. PubMed, https://doi.org/10.1186/s13059-014-0550-8.
+- https://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#log-fold-change-shrinkage-for-visualization-and-ranking
+
+== edgeR model:
+- Robinson, Mark D., et al. « edgeR: A Bioconductor Package for Differential Expression Analysis of Digital Gene Expression Data ». Bioinformatics, vol. 26, no 1, janvier 2010, p. 139-40. DOI.org (Crossref), https://doi.org/10.1093/bioinformatics/btp616.
+- https://bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
+
+== limma/voom model : 
+- Ritchie, Matthew E., et al. « limma powers differential expression analyses for RNA-sequencing and microarray studies ». Nucleic Acids Research, vol. 43, no 7, avril 2015, p. e47. PubMed Central, https://doi.org/10.1093/nar/gkv007.
+- Law, Charity W., et al. « Voom: Precision Weights Unlock Linear Model Analysis Tools for RNA-Seq Read Counts ». Genome Biology, vol. 15, no 2, février 2014, p. R29. PubMed, https://doi.org/10.1186/gb-2014-15-2-r29.
+- https://kasperdanielhansen.github.io/genbioconductor/html/limma.html
+
+== PCA :
+- Van den Berge, Koen, et al. « Trajectory-Based Differential Expression Analysis for Single-Cell Sequencing Data ». Nature Communications, vol. 11, no 1, mars 2020, p. 1201. PubMed, https://doi.org/10.1038/s41467-020-14766-3.
+
+== ward clustering :
+- https://r.qcbs.ca/workshop09/book-en/clustering.html
+- https://www.researchgate.net/publication/51962445_Ward's_Hierarchical_Clustering_Method_Clustering_Criterion_andAgglomerative_Algorithm
+- https://online.stat.psu.edu/stat505/lesson/14/14.7
+
+== trajectory analysis : 
+- https://tavareshugo.github.io/data-carpentry-rnaseq/04a_explore_test_results.html
+- Laidlaw, Ross F, et al. « TrAGEDy-Trajectory Alignment of Gene Expression Dynamics ». Bioinformatics, édité par Anthony Mathelier, vol. 41, no 3, mars 2025, p. btaf073. DOI.org (Crossref), https://doi.org/10.1093/bioinformatics/btaf073.
+
+
+== zscore : 
+- https://support.bioconductor.org/p/109594/
+
+== futher in trajectory analysis
+- https://academic.oup.com/bioinformatics/article/41/3/btaf073/8069077?login=true
+- https://bioconductor.org/books/3.14/OSCA.advanced/trajectory-analysis.html
+- Hou, Wenpin, et al. « A Statistical Framework for Differential Pseudotime Analysis with Multiple Single-Cell RNA-Seq Samples ». Nature Communications, vol. 14, no 1, novembre 2023, p. 7286. www.nature.com, https://doi.org/10.1038/s41467-023-42841-y.
+
+
+== inspired by projects :
+
+- https://github.com/AyehBlk/RAPTOR/tree/main (incredible and from ULG! )
+- https://github.com/CebolaLab/RNA-seq
+- https://ciri.gitbiopages.ens-lyon.fr/bibs/carine/rnaseq_analysis_training/Session_7.html
+https://bioconductor.org/books/3.14/OSCA.advanced/interactive-sharing.html
+- https://bioconductor.org/books/3.14/OSCA.advanced/clustering-redux.html
+- Kim, Min Cheol, et al. « Method of Moments Framework for Differential Expression Analysis of Single-Cell RNA Sequencing Data ». Cell, vol. 187, no 22, octobre 2024, p. 6393-6410.e16. DOI.org (Crossref), https://doi.org/10.1016/j.cell.2024.09.044.
+- Elahimanesh, Mohammad, et Mohammad Najafi. « Differentially Expressed Genes of RNA-Seq Data Are Suggested on the Intersections of Normalization Techniques ». Biochemistry and Biophysics Reports, vol. 37, mars 2024, p. 101618. PubMed, https://doi.org/10.1016/j.bbrep.2023.101618.
+
+== overview of RNA seq practices :
+
+- Chen, Jiung-Wen, et al. « The hitchhikers' guide to RNA sequencing and functional analysis ». Briefings in Bioinformatics, vol. 24, no 1, janvier 2023, p. bbac529. PubMed Central, https://doi.org/10.1093/bib/bbac529
+- Conesa, Ana, et al. « A survey of best practices for RNA-seq data analysis ». Genome Biology, vol. 17, 2016, p. 13. PubMed Central, https://doi.org/10.1186/s13059-016-0881-8.
+- https://bioinformatics.ccr.cancer.gov/btep/wp-content/uploads/RNASeq_Final.pdf
+- https://genomicsaotearoa.github.io/RNA-seq-workshop/5_rnaseq-diffexp/
+- https://rstudio-pubs-static.s3.amazonaws.com/1267702_e067f9d89dda428c901ab91e20a0f5cc.html
+- Rosati, Diletta, et al. « Differential gene expression analysis pipelines and bioinformatic tools for the identification of specific biomarkers: A review ». Computational and Structural Biotechnology Journal, vol. 23, mars 2024, p. 1154-68. PubMed Central, https://doi.org/10.1016/j.csbj.2024.02.018.
+- Costa-Silva, Juliana, et al. « Temporal Progress of Gene Expression Analysis with RNA-Seq Data: A Review on the Relationship between Computational Methods ». Computational and Structural Biotechnology Journal, vol. 21, 2023, p. 86-98. DOI.org (Crossref), https://doi.org/10.1016/j.csbj.2022.11.051.
+
+= conda packages
+- https://anaconda.org/channels/bioconda/packages/jq/overview
+- https://anaconda.org/channels/bioconda/packages/fastqc/overview
+- https://anaconda.org/channels/bioconda/packages/multiqc/overview
+- https://anaconda.org/channels/bioconda/packages/fastp/overview
+- https://anaconda.org/channels/bioconda/packages/salmon/overview
+- https://anaconda.org/channels/bioconda/packages/samtools/overview
+- https://anaconda.org/channels/bioconda/packages/qualimap/overview
+- https://anaconda.org/channels/bioconda/packages/deeptools/overview
+- https://anaconda.org/channels/bioconda/packages/ucsc-fatotwobit/overview
+- https://anaconda.org/channels/bioconda/packages/ucsc--facount/overview
+- https://anaconda.org/channels/bioconda/packages/star/overview
+- https://anaconda.org/channels/bioconda/packages/hisat2/overview
+
+#pagebreak()
+= QuartoMarkDown
+== Conda init
+````bash
+{bash}
+while read cmd pkg; do
+  conda env list | grep -q "^$cmd " || conda create -y -n "$cmd"
+  conda install -y -n "$cmd" -c bioconda -c conda-forge "$pkg"
+done <<EOF
+jq jq
+fastqc fastqc
+multiqc multiqc
+fastp fastp
+salmon salmon
+samtools samtools
+qualimap qualimap
+deeptools deeptools
+faToTwobit ucsc-faToTwoBit
+faCount ucsc-facount
+star star
+hisat2 hisat2
+EOF
+
+module() {
+    local env_name="$1"
+    shift
+
+    # Vérifier que conda existe
+    if ! command -v conda >/dev/null 2>&1; then
+        echo "> Conda not fund"
+        return 1
+    fi
+
+    # Activer l'environnement
+    conda activate "$env_name" || {
+        echo "> Cannot activate '$env_name'"
+        return 1
+    }
+
+    # Exécuter le programme du même nom
+    "$env_name" "$@"
+    local status=$?
+
+    # Désactiver l'environnement
+    conda deactivate
+
+    return $status
+}
+
+# TODO : try Pixi ~conda but faster and create env/workspace auto
+#cd ~/GitDir
+#pixi init <package>
+#pixi add <package>
+
+#but can be install globally whit :
+#pixi global install <package>
+#this way it made the command available globaly but each packages are installed in it's own env seperatly
+#https://pixi.prefix.dev/dev/switching_from/conda/
+
+#cd ~/GitDir/<package>
+#pixi shell
+#<package>
+````
+== JSON query
+````bash
+{bash}
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="Gen_Tran_Epi_Omics/Project"
+DATA_DIR="$PROJECT_DIR/Data"
+METADATA_DIR="$DATA_DIR/metadata"
+JSON_DIR="$METADATA_DIR/json"
+FQ_DIR="$DATA_DIR/fastq"
+
+OUT="$METADATA_DIR/samples.tsv"
+
+SEARCH_URL="https://www.encodeproject.org/search/?type=Experiment&control_type!=*&status=released&perturbed=false&replicates.library.biosample.donor.organism.scientific_name=Caenorhabditis+elegans&assay_title=total+RNA-seq&format=json&limit=all"
+
+SEARCH_JSON="$JSON_DIR/encode_search.json"
+
+JQ_FILE_NB='.["@graph"][].accession'
+
+JQ_FILE_LS='.life_stage_age // "NA"'
+
+JQ_FILE_ID='.["@id"]'
+JQ_FILE_SIZE='.file_size // "NA"'
+JQ_FILE_PE='.paired_end // "NA"'
+JQ_FILE_REP='.replicate.biological_replicate_number // "1"'
+JQ_FILE_HREF='.href // empty'
+
+MAX_FQ_SIZE=100000000 # 100 MB
+
+mkdir -p $JSON_DIR
+
+echo -e "experiment\tfile_id\tfilename\tpaired_end\treplicate\ttimepoint\tfile_size\tdownload_url" > "$OUT"
+echo "=== Téléchargement du search JSON complet…"
+curl -s -H "Accept: application/json" "$SEARCH_URL" -o "$SEARCH_JSON"
+echo " Extraction des accessions…"
+
+EXPERIMENTS=$(module jq -r "$JQ_FILE_NB" "$SEARCH_JSON")
+echo " Nombre d'expériences trouvées : $(echo "$EXPERIMENTS" | wc -l)"
+
+# ---
+# boucle pour timepoints
+# ---
+format_timepoint() {
+    local raw="$1"
+    # Extraire le nombre
+    if [[ "$raw" =~ ([0-9]+) ]]; then
+        echo "t_${BASH_REMATCH[1]}min"
+    else
+        echo "t_NA"
+    fi
+}
+
+for EXP in $EXPERIMENTS; do
+    echo "=== Traitement de l'expérience $EXP ==="
+
+    EXP_JSON="$JSON_DIR/${EXP}.json" 
+
+    curl -s -H "Accept: application/json" "https://www.encodeproject.org/experiments/${EXP}/?format=json" -o "$EXP_JSON"
+
+    # Récupérer le timepoint
+    TIMEPOINT=$(module jq -r "$JQ_FILE_LS" "$EXP_JSON")
+    TIMEPOINT=$(format_timepoint "$TIMEPOINT")
+    # Récupérer la liste des fichiers
+    FILE_IDS=$(module jq -r '.files[] | .["@id"]' "$EXP_JSON") #TODO: retravailler l'appel var ici
+
+    TP_FQ_DIR="$FQ_DIR/${TIMEPOINT}"
+    mkdir -p "$TP_FQ_DIR"
+    TP_JS_DIR="$JSON_DIR/${TIMEPOINT}"
+    mkdir "$TP_JS_DIR"
+
+    mv $EXP_JSON $TP_JS_DIR
+    for ID in $FILE_IDS; do
+        FILE_JSON="${TP_JS_DIR}/$(basename "$ID").json"
+        
+        curl -s -H "Accept: application/json" "https://www.encodeproject.org${ID}?format=json" -o "$FILE_JSON"
+
+        FILE_ID=$(module jq -r "$JQ_FILE_ID" "$FILE_JSON")
+        FILE_SIZE=$(module jq -r "$JQ_FILE_SIZE" "$FILE_JSON")
+        PAIRED_END=$(module jq -r "$JQ_FILE_PE" "$FILE_JSON")
+        REPLICATE=$(module jq -r "$JQ_FILE_REP" "$FILE_JSON")
+        HREF=$(module jq -r "$JQ_FILE_HREF" "$FILE_JSON")
+
+        if [[ -n "$HREF" ]]; then
+            FILENAME=$(basename "$HREF")
+            DOWNLOAD_URL="https://www.encodeproject.org${HREF}"
+        else
+            FILENAME="NA"
+            DOWNLOAD_URL="NA"
+        fi
+
+        # Écrire ligne dans samples.tsv
+        echo -e "${EXP}\t${FILE_ID}\t${FILENAME}\t${PAIRED_END}\t${REPLICATE}\t${TIMEPOINT}\t${FILE_SIZE}\t${DOWNLOAD_URL}" >> "$OUT"
+
+        echo "    $FILENAME  (TP: $TIMEPOINT, PE: $PAIRED_END)"
+
+        # Télécharger le fastq si < 500MB
+        if [[ "$FILE_SIZE" -le $MAX_FQ_SIZE && "$DOWNLOAD_URL" != "NA" ]]; then
+            echo "Téléchargement de $FILENAME dans $TP_FQ_DIR..."
+            curl -# -L "$DOWNLOAD_URL" -o "${TP_FQ_DIR}/${FILENAME}"
+        fi
+    done
+done
+
+awk -F'\t' -v max="$MAX_FQ_SIZE" 'NR==1 {print; next} $7 <= max {print}' "$OUT" sort -t$'\t' -k5,5r -k4,4n -k3,3n | awk -F'\t' 'BEGIN{OFS="\t"} {print $1,$3,$4,$5,$6,$8}' > "${OUT%.tsv}_filtered.tsv"
+
+mv "${OUT%.tsv}_filtered.tsv" "$OUT"
+
+echo
+echo "=== Fichier samples.tsv généré ==="
+column -t "$OUT"
+````
+== QualityCheck
+````bash
+{bash}
+#!/bin/bash
+set -euo pipefail
+
+TSV="$METADATA_DIR/samples.tsv"
+
+RES_DIR="$PROJECT_DIR/Results"
+QC_DIR="$RES_DIR/qc"
+FASTQC_DIR="$QC_DIR/fastqc"
+MULTIQC_DIR="$QC_DIR/multiqc"
+FASTP_DIR="$QC_DIR/fastp"
+
+mkdir -p "$QC_DIR" "$FASTQC_DIR" "$MULTIQC_DIR" "$FASTP_DIR"
+
+# Initialiser les tableaux associatifs
+declare -A R1_files
+declare -A R2_files
+
+# tableaux associatifs R1_files et R2_files
+function build_fastq_dicts() {
+    local TSV="$1"
+    local FQ_DIR="$2"
+
+    while IFS=$'\t' read -r exp file pe rep tp url; do
+        # Ignorer la ligne d'en-tête
+        [[ "$exp" == "experiment" ]] && continue
+        #echo "DEBUG: $exp $file $pe $rep $tp $url"
+        # Construire le chemin complet du FASTQ
+        local FASTQ_PATH="$FQ_DIR/${tp}/${file}"
+
+        # Nom de l'échantillon avec rep si >1
+        local sample
+        if [[ "$rep" == "1" ]]; then
+            sample="$tp"
+        else
+            sample="${tp}_rep${rep}"
+        fi
+
+        # Remplir R1 ou R2 selon le pair-end
+        if [[ "$pe" == "1" ]]; then
+            R1_files["$sample"]="$FASTQ_PATH"
+        elif [[ "$pe" == "2" ]]; then
+            R2_files["$sample"]="$FASTQ_PATH"
+        fi
+    done < "$TSV"
+}
+
+build_fastq_dicts "$TSV" "$FQ_DIR"
+
+# --- fastqc --- 
+for sample in "${!R1_files[@]}"; do
+    R1="${R1_files[$sample]}"
+    R2="${R2_files[$sample]:-}"
+
+    # Vérifier que R1 existe
+    if [[ ! -f "$R1" ]]; then
+        echo "WARNING: $R1 non trouvé pour $sample. Skip."
+        continue
+    fi
+
+    # Extraire le timepoint depuis le nom du sample
+    TIMEPOINT="${sample%%_rep*}"
+
+    TP_FASTQC_DIR="$FASTQC_DIR/$TIMEPOINT"
+    mkdir -p "$TP_FASTQC_DIR"
+
+    echo "=== FastQC : $sample (timepoint = $TIMEPOINT) ==="
+
+    if [[ -n "$R2" && -f "$R2" ]]; then
+        # --- PAIRED-END ---
+        module fastqc "$R1" "$R2" -o "$TP_FASTQC_DIR" -t 4 
+    else
+        # --- SINGLE-END ---
+        module fastqc "$R1" -o "$TP_FASTQC_DIR" -t 4
+    fi
+done
+
+echo "=== Génération du rapport MultiQC ==="
+module multiqc -o "$MULTIQC_DIR" "$FASTQC_DIR"
+
+#extract .svg from .html if there is no option : pass the <div > <svg > upon inspection in : https://www.svgviewer.dev/s/113328/html
+
+# --- fastp trimming --- 
+for sample in "${!R1_files[@]}"; do
+    R1="${R1_files[$sample]}"
+    R2="${R2_files[$sample]:-}"
+
+    # Vérifier que R1 existe
+    if [[ ! -f "$R1" ]]; then
+        echo "WARNING: $R1 non trouvé pour $sample. Skip."
+        continue
+    fi
+
+    # Extraire le timepoint depuis le nom du sample
+    TIMEPOINT="${sample%%_rep*}"
+
+    TP_FASTP_DIR="$FASTP_DIR/$TIMEPOINT"
+    FASTQC_CLEAN_DIR="$TP_FASTP_DIR/fastqc_clean"
+    mkdir -p "$TP_FASTP_DIR" "$FASTQC_CLEAN_DIR"
+
+    # Fichiers de sortie
+    R1_OUT="$TP_FASTP_DIR/${sample}_R1_clean.fastq.gz"
+    R2_OUT="$TP_FASTP_DIR/${sample}_R2_clean.fastq.gz"
+    HTML_REPORT="$TP_FASTP_DIR/${sample}_fastp.html"
+    JSON_REPORT="$TP_FASTP_DIR/${sample}_fastp.json"
+
+    echo "=== fastp trimming & QC : $sample (timepoint = $TIMEPOINT) ==="
+    if [[ -n "$R2" && -f "$R2" ]]; then
+        # --- Paired-end ---
+        module fastp -i "$R1" -I "$R2" -o "$R1_OUT" -O "$R2_OUT" -q 25 -g -l 50 --thread 4 --html "$HTML_REPORT" --json "$JSON_REPORT"
+        fastqc "$R1_OUT" "$R2_OUT" -o "$FASTQC_CLEAN_DIR" -t 4
+    else
+        # --- Single-end ---
+        module fastp -i "$R1" -o "$R1_OUT" -q 25 -g -l 50 --thread 4 --html "$HTML_REPORT" --json "$JSON_REPORT"
+        fastqc "$R1_OUT" -o "$FASTQC_CLEAN_DIR" -t 4
+    fi
+done
+
+echo "=== Génération du rapport MultiQC ==="
+module multiqc -o "$FASTP_DIR/multiqc_clean" "$FASTP_DIR"
+#nearly no differences, ~93% 
+````
+== Pseudo-Alignement
+````bash
+{bash}
+#!/bin/bash
+set -euo pipefail
+
+# paramètres
+REF_DIR="$DATA_DIR/reference"
+QUANT_DIR="$RES_DIR/quants"
+SALMON_DIR="$QUANT_DIR/salmon"
+INDEX_DIR="$RES_DIR/index"
+SA_IN_DIR="$INDEX_DIR/salmon_index"
+
+THREADS=8
+NUM_BOOTSTRAPS=0 # mettre 0 pour désactiver | pas vraiment utile si pas de réplicat ou si pas utiliser plus loin. Sert à calculer une variance intra-échantillon
+SALMON_EXTRA="--seqBias --gcBias --validateMappings"
+
+mkdir -p "$REF_DIR" "$QUANT_DIR" "$SALMON_DIR" "$SA_IN_DIR" "$SA_IN_DIR"
+
+function build_fastp_dicts() {
+    local TSV="$1"
+    local FASTP_DIR="$2"
+
+    while IFS=$'\t' read -r exp file pe rep tp url; do
+        # Ignorer l'en-tête
+        [[ "$exp" == "experiment" ]] && continue
+        #echo "DEBUG: $exp $file $pe $rep $tp $url"
+
+        # Nom de l'échantillon
+        local sample
+        if [[ "$rep" == "1" ]]; then
+            sample="$tp"
+        else
+            sample="${tp}_rep${rep}"
+        fi
+
+        # Chemins FASTP 
+        local R1_PATH="$FASTP_DIR/$tp/${tp}_R1_clean.fastq.gz"
+        local R2_PATH="$FASTP_DIR/$tp/${tp}_R2_clean.fastq.gz"
+
+        # Renseigner R1/R2 si présents
+        if [[ "$pe" == "1" && -f "$R1_PATH" ]]; then
+            R1_files["$sample"]="$R1_PATH"
+        elif [[ "$pe" == "2" && -f "$R2_PATH" ]]; then
+            R2_files["$sample"]="$R2_PATH"
+        fi
+    done < "$TSV"
+}
+
+# Télécharger cDNA et gtf
+if [ ! -f "$REF_DIR/Caenorhabditis_elegans.WBcel235.cdna.all.fa.gz" ]; then
+  wget -O "$REF_DIR/Caenorhabditis_elegans.WBcel235.cdna.all.fa.gz" "ftp://ftp.ensembl.org/pub/release-115/fasta/caenorhabditis_elegans/cdna/Caenorhabditis_elegans.WBcel235.cdna.all.fa.gz"
+fi
+
+# --- SALMON ---
+# Construire l'index Salmon si absent
+if [ ! -d "$SA_IN_DIR" ] || [ -z "$(ls -A $SA_IN_DIR 2>/dev/null)" ]; then
+  module salmon index -t "$REF_DIR/Caenorhabditis_elegans.WBcel235.cdna.all.fa.gz" -i "$SA_IN_DIR" --kmerLen 31
+fi
+
+build_fastp_dicts "$TSV" "$FASTP_DIR"
+
+# Lancer la quantification
+for sample in "${!R1_files[@]}"; do
+    R1="${R1_files[$sample]}"
+    R2="${R2_files[$sample]:-NA}"
+    out="$SALMON_DIR/$sample"
+    mkdir -p "$out"
+
+    if [[ "$R2" != "NA" ]]; then
+        echo "=== [PAIRED] $sample ==="
+        module salmon quant -i "$SA_IN_DIR" -l A -1 "$R1" -2 "$R2" -p "$THREADS" $SALMON_EXTRA --numBootstraps $NUM_BOOTSTRAPS -o "$out"
+    else
+        echo "=== [SINGLE] $sample ==="
+        module salmon quant -i "$SA_IN_DIR" -l A -r "$R1" -p "$THREADS" $SALMON_EXTRA --numBootstraps $NUM_BOOTSTRAPS -o "$out"
+    fi
+done
+echo "=== Quantification Salmon terminée ==="
+
+echo "=== Génération du rapport MultiQC ==="
+module multiqc -o "$SALMON_DIR/multiqc" "$SALMON_DIR"
+````
+== Splice-Aware Alignement
+````bash
+{bash}
+#!/bin/bash
+set -euo pipefail
+
+# paramètres
+ALIGN_DIR="$RES_DIR/reference/alignments"
+HISAT2_DIR="$QUANT_DIR/HISAT2"
+STAR_DIR="$QUANT_DIR/STAR"
+HI_IN_DIR="$INDEX_DIR/hisat2_index"
+ST_IN_DIR="$INDEX_DIR/star_index"
+
+MULTI_QC_HI_FILE="$HISAT2_DIR/multi_bamqc.tsv" 
+MULTI_QC_ST_FILE="$STAR_DIR/multi_bamqc.tsv" 
+
+READ_LENGTH=75
+SJDB_OVERHANG=$((READ_LENGTH - 1))
+FRAGMENT_LENGTH=$(( READ_LENGTH * 2 ))
+
+mkdir -p "$ALIGN_DIR" "$HI_IN_DIR" "$ST_IN_DIR" "$HISAT2_DIR" "$STAR_DIR"
+
+
+process_bam() {
+    local SORTED_BAM="$1"
+    local OUT_DIR="$2"
+    local SAMPLE="$3"
+    local MULTI_QC_FILE="$4"
+    local ALIGNER="$5" # "STAR" ou "HISAT2"
+
+    # Index BAM
+    mkdir -p "$OUT_DIR"
+
+    module samtools index "$SORTED_BAM"
+
+    # Stats BAM
+    module samtools stats "$SORTED_BAM" > "$OUT_DIR/${SAMPLE}_bam_stats.txt"
+    grep ^SN "$OUT_DIR/${SAMPLE}_bam_stats.txt" > "$OUT_DIR/${SAMPLE}_bam_stats_SN.txt"
+    module samtools flagstat "$SORTED_BAM" > "$OUT_DIR/${SAMPLE}-sorted.flagstat"
+
+    # Qualimap
+    module qualimap bamqc -bam "$SORTED_BAM" -gff "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf" -outdir "$OUT_DIR/${SAMPLE}-bamqc-qualimap-report" --java-mem-size=16G
+    module qualimap rnaseq -bam "$SORTED_BAM" -gtf "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf" -outdir "$OUT_DIR/${SAMPLE}-rnaseq-qualimap-report" --java-mem-size=16G
+
+    # GC-bias correction
+    conda activate deeptools
+    computeGCBias -b "$SORTED_BAM" --effectiveGenomeSize $EFFECTIVE_GENOME_SIZE -g $REF_DIR/Caenorhabditis_elegans.WBcel235.2bit -l $FRAGMENT_LENGTH --GCbiasFrequenciesFile "$OUT_DIR/${SAMPLE}.freq.txt" --biasPlot "$OUT_DIR/${SAMPLE}.biasPlot.pdf" --sampleSize 5000000
+    correctGCBias -b "$SORTED_BAM" --effectiveGenomeSize $EFFECTIVE_GENOME_SIZE -g $REF_DIR/Caenorhabditis_elegans.WBcel235.2bit --GCbiasFrequenciesFile "$OUT_DIR/${SAMPLE}.freq.txt" -o "$OUT_DIR/${SAMPLE}.gc_corrected.bam"
+    samtools index "$OUT_DIR/${SAMPLE}.gc_corrected.bam"
+
+    # Ajouter le BAM dans le MultiQC file
+    echo -e "${SAMPLE}\t$SORTED_BAM\t$ALIGNER" >> "$MULTI_QC_FILE"
+
+    # BigWig
+    bamCoverage -b "$OUT_DIR/${SAMPLE}.gc_corrected.bam" -o "$OUT_DIR/${SAMPLE}.bw" --normalizeUsing BPM --samFlagExclude 512 --binSize 50
+    conda deactivate
+}
+
+# Télécharger génome de référence 
+if [ ! -f "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa.gz" ]; then
+  wget -O "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa.gz" "https://ftp.ensembl.org/pub/release-115/fasta/caenorhabditis_elegans/dna/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa.gz"
+fi
+
+if [ ! -f "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf.gz" ]; then 
+  wget -O "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf.gz" "ftp://ftp.ensembl.org/pub/release-115/gtf/caenorhabditis_elegans/Caenorhabditis_elegans.WBcel235.115.gtf.gz"
+fi
+
+gunzip -c "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa.gz" > "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa"
+#toplevel vs toplevel sm : sm masque partiellement les zones répétées donc moins d'alignement sur ces régions
+
+gunzip -c "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf.gz" > "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf"
+
+module faToTwoBit $REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa $REF_DIR/Caenorhabditis_elegans.WBcel235.2bit
+
+module faCount $REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa > $REF_DIR/WBcel235.faCount.txt
+
+EFFECTIVE_GENOME_SIZE=$(awk '$1=="total"{print $2-$7}' $REF_DIR/WBcel235.faCount.txt)
+
+# --- STAR ---
+module STAR --runThreadN $THREADS --runMode genomeGenerate --genomeDir $ST_IN_DIR --genomeFastaFiles $REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa --sjdbGTFfile "$REF_DIR/Caenorhabditis_elegans.WBcel235.115.gtf" --sjdbOverhang $SJDB_OVERHANG --genomeSAindexNbases 11
+
+build_fastp_dicts "$TSV" "$FASTP_DIR"
+echo -n "" > "$MULTI_QC_ST_FILE"
+for sample in "${!R1_files[@]}"; do
+    R1="${R1_files[$sample]}"
+    R2="${R2_files[$sample]:-NA}"
+
+    # Vérification des fichiers
+    if [[ ! -f "$R1" ]]; then
+        echo "WARNING: $R1 non trouvé pour $sample. Skip."
+        continue
+    fi
+    if [[ "$R2" != "NA" && ! -f "$R2" ]]; then
+        echo "WARNING: $R2 non trouvé pour $sample. Skip."
+        continue
+    fi
+
+    RUN_DIR="$STAR_DIR/$sample"
+    mkdir -p "$RUN_DIR"
+
+    OUT_PREFIX="$RUN_DIR/$sample"
+    SORTED_BAM="$OUT_PREFIX.sorted.bam"
+
+    echo "=== Alignement STAR : $sample ==="
+
+    if [[ "$R2" != "NA" ]]; then
+        module STAR --runThreadN "$THREADS" --genomeDir "$ST_IN_DIR" --readFilesIn "$R1" "$R2" --readFilesCommand gunzip --outFileNamePrefix "$RUN_DIR/" --outSAMtype BAM SortedByCoordinate
+    else
+        module STAR --runThreadN "$THREADS" --genomeDir "$ST_IN_DIR" --readFilesIn "$R1" --readFilesCommand gunzip --outFileNamePrefix "$RUN_DIR/" --outSAMtype BAM SortedByCoordinate
+    fi
+
+    # Renommage du BAM STAR
+    mv "$RUN_DIR/Aligned.sortedByCoord.out.bam" "$SORTED_BAM"
+
+    # Appel de la fonction
+    process_bam "$SORTED_BAM" "$RUN_DIR" "$sample" "$MULTI_QC_ST_FILE" "STAR"
+done
+
+# % of reads aligned to exons
+cat "${OUT_PREFIX}-rnaseq-qualimap-report/rnaseq_qc_results.txt" | grep exonic | cut -d '(' -f 2 | cut -d ')' -f1 "${OUT_PREFIX}-rnaseq-qualimap-reports"
+
+# Nb of aligned reads properly paired 
+# The total number of reads mapped
+cat "${OUT_PREFIX}-sorted.flagstat" | grep mapped | head -n1 | cut -d ' ' -f1
+
+# The total number of properly paired reads
+cat "${OUT_PREFIX}-sorted.flagstat" | grep 'properly paired' | head -n1 | cut -d ' ' -f1
+
+echo "=== Génération du rapport qualimap-bamQC ==="
+module qualimap multi-bamqc -r -d "$MULTI_QC_ST_FILE" -outdir "$STAR_DIR/qualimap_multi_bamqc" --java-mem-size=4G
+
+echo "=== Génération du rapport MultiQC ==="
+module multiqc -o "$STAR_DIR/multiqc" "$STAR_DIR"
+
+# --- HISAT2 ---
+conda activate hisat2
+hisat2-build "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa" "$HI_IN_DIR/hisat2_index" # utiliser hisat2 au lieu de BWA car BWA n'est pas "utilisable" pour du RNAseq, il n'est pas "splice aware" https://www.biostars.org/p/330942/ https://daehwankimlab.github.io/hisat2/manual/
+
+# Générer chrom.sizes
+module samtools faidx "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa"
+cut -f1,2 "$REF_DIR/Caenorhabditis_elegans.WBcel235.dna_sm.toplevel.fa.fai" > "$REF_DIR/chrom.sizes"
+
+build_fastp_dicts "$TSV" "$FASTP_DIR"
+echo -n "" > "$MULTI_QC_HI_FILE"
+for sample in "${!R1_files[@]}"; do
+    R1="${R1_files[$sample]}"
+    R2="${R2_files[$sample]:-NA}"
+
+    # Vérifier que les fichiers existent
+    if [[ ! -f "$R1" ]]; then
+        echo "WARNING: $R1 non trouvé pour $sample. Skip."
+        continue
+    fi
+    if [[ "$R2" != "NA" && ! -f "$R2" ]]; then
+        echo "WARNING: $R2 non trouvé pour $sample. Skip."
+        continue
+    fi
+
+    RUN_DIR="$HISAT2_DIR/$sample"
+    HISAT2_LOG="$RUN_DIR/${sample}.hisat2.log"
+    mkdir -p "$RUN_DIR"
+
+    OUT_PREFIX="$RUN_DIR/$sample"
+    SAM="$OUT_PREFIX.sam"
+    BAM="$OUT_PREFIX.bam"
+    SORTED_BAM="$OUT_PREFIX.sorted.bam"
+
+    echo "=== Alignement HISAT2 : $sample ==="
+
+    if [[ "$R2" != "NA" ]]; then
+        hisat2 -x "$HI_IN_DIR/hisat2_index" -1 "$R1" -2 "$R2" -p "$THREADS" --dta -S "$SAM" 2> "$HISAT2_LOG"
+    else
+        hisat2 -x "$HI_IN_DIR/hisat2_index" -U "$R1" -p "$THREADS" --dta -S "$SAM" 2> "$HISAT2_LOG"
+    fi
+
+    # Conversion BAM + tri + index
+    module samtools view -@ "$THREADS" -b "$SAM" > "$BAM"
+    module samtools sort -@ "$THREADS" "$BAM" -o "$SORTED_BAM"
+
+    # Appel de la fonction
+    process_bam "$SORTED_BAM" "$RUN_DIR" "$sample" "$MULTI_QC_HI_FILE" "HISAT"
+done
+conda deactivate
+
+# % of reads aligned to exons
+cat "${OUT_PREFIX}-rnaseq-qualimap-report/rnaseq_qc_results.txt" | grep exonic | cut -d '(' -f 2 | cut -d ')' -f1 "${OUT_PREFIX}-rnaseq-qualimap-reports"
+
+# Nb of aligned reads properly paired 
+# The total number of reads mapped
+cat "${OUT_PREFIX}-sorted.flagstat" | grep mapped | head -n1 | cut -d ' ' -f1
+
+# The total number of properly paired reads
+cat "${OUT_PREFIX}-sorted.flagstat" | grep 'properly paired' | head -n1 | cut -d ' ' -f1
+
+module qualimap multi-bamqc -r -d "$MULTI_QC_HI_FILE" -outdir "$HISAT2_DIR/qualimap_multi_bamqc" --java-mem-size=4G
+
+echo "=== Génération du rapport MultiQC ==="
+module multiqc -o "$HISAT2_DIR/multiqc" "$HISAT2_DIR"
+
+# add qualimap 
+#TODO: add STAR méthod which is better than HISAT2
+
+#then open in igv : https://igv.org/app/
+````
+
+== R analysis
+=== Setup
+````r
+{r}
+setwd('~/Documents/R/Gen_Tran_Epi_Omics/Project/')
+
+# --- Librairies ---
+# CRAN packages
+pkgs <- c(
+  "ggplot2", "ggrepel", "ggdendro", "ggVennDiagram", "dplyr", "readr", "stringr", "tibble"
+)
+
+# Bioconductor packages
+pkgs_bioc <- c(
+  "tximport", "edgeR", "DESeq2", "pheatmap", "reshape2", "biomaRt", "limma"
+)
+
+# Installer les packages CRAN si nécessaire
+for (pkg in pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  suppressPackageStartupMessages(
+    library(pkg, character.only = TRUE)
+    )
+}
+
+# Installer les packages Bioconductor si nécessaire
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+# Installer les Bioconductor packages
+BiocManager::install(pkgs_bioc, update = FALSE, ask = FALSE)
+
+# Charger les Bioconductor packages
+for (pkg in pkgs_bioc) {
+  suppressPackageStartupMessages(
+    library(pkg, character.only = TRUE)
+  )
+}
+#TODO: transformer la logique en fonction
+````
+=== Functions library
+````r
+{r}
+# ---
+# Functions library
+# ---
+
+# --- debug ---
+debug <- function(x, name = deparse(substitute(x)), n = 10) {
+
+  cat("\n====\n")
+  cat("DEBUG:", name, "\n")
+  cat("====\n")
+
+  cat("\nDimensions:\n")
+  print(dim(x))
+
+  cat("\nHead (first", n, "rows):\n")
+  print(utils::head(x, n))
+
+  cat("\nSummary:\n")
+  print(summary(x))
+
+  cat("\n====\n")
+  invisible(x)
+}
+
+# --- gtf2tx2gene ---
+gtf2tx2gene <- function(gtf_file) {
+
+  gtf <- readr::read_tsv(
+    gtf_file,
+    comment = "#",
+    col_names = FALSE,
+    show_col_types = FALSE
+  )
+
+  tx2gene <- gtf %>%
+    dplyr::filter(X3 == "transcript") %>%
+    dplyr::mutate(
+      transcript_id = str_extract(X9, 'transcript_id "[^"]+"') |>
+        str_remove_all('transcript_id |"'),
+      gene_id = str_extract(X9, 'gene_id "[^"]+"') |>
+        str_remove_all('gene_id |"')
+    ) %>%
+    dplyr::select(transcript_id, gene_id) %>%
+    dplyr::distinct()
+}
+
+# --- meta2coldata ---
+meta2coldata <- function(samples_file, paired_end = 2) {
+  samples <- readr::read_tsv(samples_file, show_col_types = FALSE)
+
+  coldata <- samples %>%
+    dplyr::filter(paired_end == !!paired_end) %>%
+    dplyr::select(experiment, timepoint, replicate) %>%
+    as.data.frame()
+
+  # Convertir en facteurs avec ordre préservé
+  coldata$timepoint <- factor(coldata$timepoint, levels = unique(coldata$timepoint))
+  coldata$replicate <- factor(coldata$replicate, levels = unique(coldata$replicate))
+
+  return(coldata)
+}
+
+# --- buildquant ---
+buildquant <- function(quant_dir, coldata, timepoints = NULL) {
+  if (is.null(timepoints)) {
+    timepoints <- coldata$timepoint
+  }
+
+  files <- file.path(quant_dir, coldata$timepoint, "quant.sf")
+  names(files) <- coldata$timepoint
+
+  # Vérification que tous les fichiers existent
+  stopifnot(all(file.exists(files[timepoints])))
+
+  files[timepoints]
+}
+
+# --- builddds ---
+builddds <- function(txi, coldata, timepoint_col = "timepoint", 
+                     timepoints = NULL, design_formula = ~ timepoint,
+                     min_count = 10, min_samples = 2) {
+
+  # --- Utiliser la colonne timepoint comme rownames ---
+  rownames(coldata) <- coldata[[timepoint_col]]
+
+  # --- Filtrer coldata si timepoints précisés ---
+  if (!is.null(timepoints)) {
+    coldata_sub <- coldata[coldata[[timepoint_col]] %in% timepoints, , drop = FALSE]
+  } else {
+    coldata_sub <- coldata
+  }
+
+  # --- Filtrer txi seulement pour les éléments matrice ---
+  keep_samples <- colnames(txi$counts) %in% rownames(coldata_sub)
+  if (sum(keep_samples) == 0) {
+    stop("Aucune colonne de txi ne correspond aux timepoints spécifiés dans coldata.")
+  }
+
+  txi_sub <- txi
+  for (slot in c("counts", "abundance", "length")) {
+    if (!is.null(txi[[slot]])) {
+      txi_sub[[slot]] <- txi[[slot]][, keep_samples, drop = FALSE]
+    }
+  }
+
+  # --- Créer le DESeqDataSet ---
+  dds <- DESeq2::DESeqDataSetFromTximport(
+    txi_sub,
+    colData = coldata_sub,
+    design = design_formula
+  )
+
+  # --- Filtrer gènes très bas ---
+  keep_genes <- rowSums(counts(dds) >= min_count) >= min_samples
+  dds <- dds[keep_genes, ]
+
+  # --- Infos rapides ---
+  library_sizes <- colSums(counts(dds))
+  cat("====\n")
+  cat("Library sizes (sum of counts per sample):\n")
+  print(library_sizes)
+  cat("====\n")
+
+  return(dds)
+}
+
+# --- computelogfc ---
+computelfc <- function(dds, ref_col = 1, cond_col = 2) {
+  # Normalisation
+  dds <- DESeq2::estimateSizeFactors(dds)
+  norm_counts <- counts(dds, normalized = TRUE)
+  
+  # Calcul log2 fold change (manuellement)
+  logfc <- log2(norm_counts[, ref_col] + 1) - log2(norm_counts[, cond_col] + 1)
+  
+  lfc_table <- data.frame(logFC = logfc) %>%
+    dplyr::arrange(desc(abs(logFC)))
+  
+  list(lfc_table = lfc_table, norm_counts = norm_counts)
+}
+
+# --- annotgenes ---
+annotgenes <- function(lfc_table, gene_ids, mart_dataset = "celegans_gene_ensembl") {
+  mart <- biomaRt::useMart("ensembl", dataset = mart_dataset)
+  
+  annot <- biomaRt::getBM(
+    attributes = c("wormbase_gene", "external_gene_name", "description"),
+    filters = "wormbase_gene",
+    values = gene_ids,
+    mart = mart
+  )
+  
+  lfc_annot <- lfc_table %>%
+    tibble::rownames_to_column(var = "gene_id") %>%
+    dplyr::left_join(annot, by = c("gene_id" = "wormbase_gene")) %>%
+    dplyr::mutate(description = stringr::str_remove(description, "\\s*\\[Source:NCBI gene.*$"))
+  
+  return(lfc_annot)
+}
+
+# --- makedir ---
+makedir <- function(path) {
+  if (!dir.exists(path)) {
+    dir.create(path, recursive = TRUE)
+  }
+}
+
+# --- plot2pdf ---
+plot2pdf <- function(plot, file, width = 6, height = 5) {
+  pdf(file, width = width, height = height)
+  print(plot)
+  invisible(dev.off())
+}
+
+# --- plotlfc ---
+plotlfc <- function(df, out_dir, lfc_thresh = NULL, suffix = "", colname = "") {
+  
+  title_suffix <- ifelse(suffix != "", paste0(" (", suffix, ")"), "")
+  file_suffix <- ifelse(suffix != "", paste0("_", suffix), "")
+  
+  p_global <- ggplot(df, aes(x = .data[[colname]])) +
+    geom_histogram(bins = 50, fill = "steelblue", color = "black") +
+    theme_minimal() +
+    ggtitle(paste0("Distribution des ", colname, title_suffix))
+  
+  plot2pdf(p_global, file.path(out_dir, paste0(colname, "_histogram", file_suffix, ".pdf")))
+  
+  if (!is.null(lfc_thresh)) {
+    # filtrer
+    df_filtered <- df %>% dplyr::filter(abs(.data[[colname]]) >= lfc_thresh)
+    
+    p_thresh <- ggplot(df_filtered, aes(x = .data[[colname]])) +
+      geom_histogram(bins = 30, fill = "tomato", color = "black") +
+      theme_minimal() +
+      ggtitle(paste0("Distribution des gènes avec |", colname, "| >= ", lfc_thresh, title_suffix))
+    
+    plot2pdf(p_thresh, file.path(out_dir, paste0(colname, "_>=|", lfc_thresh, "|_histogram", file_suffix, ".pdf")))
+    
+    if ("external_gene_name" %in% colnames(df_filtered)) {
+      df_filtered_sorted <- df_filtered %>% dplyr::arrange(desc(.data[[colname]]))
+
+      df_filtered_sorted <- df_filtered_sorted %>% dplyr::mutate(lfc_class = floor(abs(.data[[colname]])))
+      
+      # Ajuster width/height 
+      n_genes <- nrow(df_filtered_sorted)
+
+      height_per_gene <- 0.35
+      min_height <- 8
+      max_height <- 200
+
+      bar_height <- max(
+        min_height,
+        min(max_height, n_genes * height_per_gene)
+      )
+
+      bar_width <- 12
+
+      p_bar <- ggplot(df_filtered_sorted, aes(x = reorder(external_gene_name, .data[[colname]]),
+                                              y = .data[[colname]], fill = factor(lfc_class))) +
+        geom_col() +
+        coord_flip() +
+        scale_fill_viridis_d(
+          name = "|logFC|",
+          option = "plasma",
+          direction = -1
+        ) +
+        theme_minimal(base_size = 11) +
+        labs(title = paste0("Gènes avec |", colname, "| >= ", lfc_thresh, title_suffix),
+             x = "Gène", y = colname)
+      
+      plot2pdf(p_bar, file.path(out_dir, paste0(colname, "_>=|", lfc_thresh, "|_genes_histogram", file_suffix, ".pdf")),
+               width = bar_width, height = bar_height)
+    }
+  }
+}
+
+# --- buildDGElist ---
+buildDGEList <- function(txi_counts, coldata) {
+
+  counts_mat <- round(txi_counts)
+
+  y <- DGEList(counts = counts_mat)
+
+  y$coldata <- data.frame(
+    timepoint = coldata$timepoint,
+    experiment = coldata$experiment,
+    row.names = colnames(counts_mat)
+  )
+
+  return(y)
+}
+
+# --- filterlow ---
+filterlow <- function(dge, min_total_count, min_prop) {
+  keep <- rowSums(cpm(dge) >= min_total_count) >= (min_prop * ncol(dge))
+  dge_filtered <- dge[keep, , keep.lib.sizes = FALSE]
+  return(dge_filtered)
+}
+
+# --- normalizeDGElist ---
+normalizeDGElist <- function(dge, method) {
+  if (!method %in% c("TMM", "upperquartile")) stop("Méthode inconnue")
+  dge <- calcNormFactors(dge, method = method)
+  return(dge)
+}
+
+# --- ensurelabel --- #TODO: check et rajouter pour logFC début
+ensurelabel <- function(
+                        df,
+                        primary = "external_gene_name",
+                        fallback = "gene_id"
+                        ) {
+
+  if (!primary %in% colnames(df)) {
+    df[[primary]] <- df[[fallback]]    
+  } else {
+    # remplacer NA ou chaînes vides
+    missing <- is.na(df[[primary]]) | df[[primary]] == ""
+    if (any(missing)) {
+      df[[primary]][missing] <- df[[fallback]][missing]
+    }
+  }
+  return(df)
+}
+
+# --- simulatecounts ---
+simulatecounts <- function(counts_mat, nrep, bcv, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+  
+  # Détecter si l'entrée est un DESeqDataSet
+  if (inherits(counts_mat, "DESeqDataSet")) {
+    counts_mat <- counts(counts_mat, normalized = FALSE) # utiliser les counts bruts
+  } else if (is.matrix(counts_mat) || is.data.frame(counts_mat)) {
+    counts_mat <- as.matrix(counts_mat)
+  } else {
+    stop("x doit être soit un DESeqDataSet, soit une matrice de counts")
+  }
+
+  ngenes <- nrow(counts_mat)
+  nsamples <- ncol(counts_mat)
+  
+  sim_counts <- matrix(0, nrow = ngenes, ncol = nsamples * nrep)
+  rownames(sim_counts) <- rownames(counts_mat)
+  colnames(sim_counts) <- paste0(rep(colnames(counts_mat), each = nrep), "_rep", 1:nrep)
+  
+  for (i in 1:ngenes) {
+    for (j in 1:nsamples) {
+      mu <- counts_mat[i, j]
+      sim_counts[i, ((j-1)*nrep + 1):(j*nrep)] <- rnbinom(nrep, size = 1/bcv^2, mu = mu)
+    }
+  }
+  
+  return(sim_counts)
+}
+
+# --- edgeRQLF --- #TODO: retravailler
+edgeRQLF <- function(orig_counts, bcv) {
+  # DGEList
+  dge <- DGEList(counts = orig_counts)
+
+  group <- factor(sub("_rep[0-9]+$", "", colnames(dge$counts)))
+  dge$samples$group <- group
+  
+  # Design
+  design <- model.matrix(~ 0 + group)
+  colnames(design) <- levels(group)
+  dge$design <- design
+  
+  # FitQLF
+  fit <- glmQLFit(dge, dispersion = bcv^2)
+
+  return(fit)
+}
+
+# --- plotvolcano ---
+plotvolcano <- function(
+                        volcano_df,
+                        out_dir,
+                        file_name = "volcano.pdf",
+                        x = "log2FoldChange",
+                        y = "padj",
+                        label = "external_gene_name",
+                        lfc_thresh = 1,
+                        fdr_thresh = 0.05,
+                        top_genes_n = 50,
+                        width = 18,
+                        height = 16
+                        ) {
+
+  # Sécurité : retirer NA
+  volcano_df <- volcano_df[is.finite(volcano_df[[x]]) & is.finite(volcano_df[[y]]), ]
+
+  # Créer un facteur pour la couleur directement dans geom_point
+  volcano_df$Regulation <- with(volcano_df, ifelse(
+    volcano_df[[y]] < fdr_thresh & volcano_df[[x]] > lfc_thresh, "Upregulated",
+    ifelse(volcano_df[[y]] < fdr_thresh & volcano_df[[x]] < -lfc_thresh, "Downregulated", "Not Significant")
+  ))
+
+  # Sélection des gènes à annoter
+  volcano_labels <- rbind(
+    subset(volcano_df, volcano_df[[y]] < fdr_thresh & volcano_df[[x]] > lfc_thresh)[1:top_genes_n, ],
+    subset(volcano_df, volcano_df[[y]] < fdr_thresh & volcano_df[[x]] < -lfc_thresh)[1:top_genes_n, ]
+  )
+
+  # Plot
+  volcano <- ggplot(volcano_df, aes(x = .data[[x]], y = -log10(.data[[y]]))) +
+    geom_point(aes(color = Regulation), alpha = 0.6) +
+    scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "green", "Not Significant" = "black")) +
+    geom_vline(xintercept = c(-lfc_thresh, lfc_thresh), linetype = "dashed") +
+    geom_hline(yintercept = -log10(fdr_thresh), linetype = "dashed") +
+    geom_text_repel(
+      data = volcano_labels,
+      aes(label = .data[[label]]),
+      size = 3,
+      box.padding = 0.8,
+      point.padding = 0.5,
+      force = 2,
+      max.overlaps = Inf,
+      segment.color = 'grey50',
+      color = "blue"
+    ) +
+    labs(
+      x = paste0("log2 Fold Change"),
+      y = "-log10(adjusted p-value)",
+      title = "Volcano Plot",
+      color = "Gene Regulation"
+    ) +
+    theme_minimal()
+
+  # Export PDF
+  plot2pdf(volcano, file.path(out_dir, file_name), width = width, height = height)
+}
+
+# --- limmabayes ---
+limmabayes <- function(orig_counts) {
+  # DGEList
+  dge <- DGEList(counts = orig_counts)
+
+  group <- factor(sub("_rep[0-9]+$", "", colnames(dge$counts)))
+  dge$samples$group <- group
+  
+  # Design
+  design <- model.matrix(~ 0 + group)
+  colnames(design) <- levels(group)
+  dge$design <- design
+  
+  # voom
+  v <- voom(dge, design)
+
+  # Fit linéaire + ebayes
+  fit <- lmFit(v, design)
+  fit <- eBayes(fit)
+
+  return(fit)
+}
+
+# --- comparelfccpm ---  
+comparelfccpm <- function(
+                          manual_df,
+                          manual_df_name,
+                          model_df,
+                          model_df_name,
+                          gene_col,
+                          lfc_manual_col,
+                          lfc_model_col,
+                          cpm_manual_col = NULL,
+                          cpm_model_col  = NULL,
+                          out_dir,
+                          method = "spearman"
+                         ) {
+
+  # --- Sélection minimale obligatoire ---
+  compare_df <- manual_df %>%
+    dplyr::select(
+      gene_id = all_of(gene_col),
+      logFC_manual = all_of(lfc_manual_col)
+    ) %>%
+    dplyr::inner_join(
+      model_df %>%
+        dplyr::select(
+          gene_id = all_of(gene_col),
+          logFC_model = all_of(lfc_model_col)
+        ),
+      by = "gene_id"
+    )
+
+  # === logFC ===
+
+  cor_logFC <- cor(
+                   compare_df$logFC_manual,
+                   compare_df$logFC_model,
+                   method = method,
+                   use = "complete.obs"
+                   )
+
+  cat(paste0("\n=== correlation logFC ", manual_df_name, " vs ", model_df_name, " ===\n"))
+  print(cor_logFC)
+
+  p_logFC <- ggplot(compare_df,
+                    aes(x = logFC_manual, y = logFC_model)) +
+    geom_point(alpha = 0.4) +
+    geom_abline(slope = 1, intercept = 0,
+                linetype = "dashed", color = "red") +
+    theme_minimal() +
+    labs(
+      title = paste0("logFC", manual_df_name, " vs ", model_df_name),
+      subtitle = paste0(method, " correlation = ", round(cor_logFC, 3)),
+      x = paste0("logFC ", manual_df_name),
+      y = paste0("logFC ", model_df_name)
+    )
+
+  plot2pdf(
+    p_logFC,
+    file.path(out_dir, paste0("logFC_manual_vs_", model_df_name, ".pdf"))
+  )
+
+  # === logCPM ===
+  if (!is.null(cpm_manual_col) && !is.null(cpm_model_col)) {
+
+    compare_df <- compare_df %>%
+      dplyr::inner_join(
+        manual_df %>%
+          dplyr::select(
+            gene_id = all_of(gene_col),
+            logCPM_manual = all_of(cpm_manual_col)
+          ),
+        by = "gene_id"
+      ) %>%
+      dplyr::inner_join(
+        model_df %>%
+          dplyr::select(
+            gene_id = all_of(gene_col),
+            logCPM_model = all_of(cpm_model_col)
+          ),
+        by = "gene_id"
+      )
+
+    cor_logCPM <- cor(
+      compare_df$logCPM_manual,
+      compare_df$logCPM_model,
+      method = method,
+      use = "complete.obs"
+    )
+
+    cat(paste0("\n=== correlation logCPM manual vs ", model_df_name, " ===\n"))
+    print(cor_logCPM)
+
+    p_logCPM <- ggplot(compare_df,
+                       aes(x = logCPM_manual, y = logCPM_model)) +
+      geom_point(alpha = 0.4) +
+      geom_smooth(method = "lm", se = FALSE,
+                  linetype = "dashed") +
+      theme_minimal() +
+      labs(
+        title = paste0("logCPM manual vs ", model_df_name),
+        subtitle = paste0(method, " correlation = ", round(cor_logCPM, 3)),
+        x = "logCPM manual",
+        y = paste0("logCPM ", model_df_name)
+      )
+
+    plot2pdf(
+      p_logCPM,
+      file.path(out_dir, paste0("logCPM_manual_vs_", model_df_name, ".pdf"))
+    )
+
+  } else {
+    message("logCPM non fourni, analyse logCPM ignorée")
+  }
+
+  return(compare_df)
+}
+
+# --- plotvenn
+plotvenn <- function(
+                     DEGs_deseq2,
+                     DEGs_edgeR,
+                     DEGs_limma,
+                     out_dir,
+                     file_name = "VennDiagram.pdf",
+                     title = "Venn Diagram of DEGs",
+                     low_color = "lightgreen",
+                     high_color = "purple",
+                     width = 6,
+                     height = 5
+                     ) {
+  
+
+  # --- Construction des listes de gènes ---
+  genes_deseq2 <- rownames(DEGs_deseq2)
+  genes_edgeR  <- rownames(DEGs_edgeR)
+  genes_limma  <- rownames(DEGs_limma)
+  
+  common_genes <- intersect(
+    intersect(genes_deseq2, genes_edgeR),
+    genes_limma
+  )
+  
+  gene_lists <- list(
+    DESeq2 = genes_deseq2,
+    edgeR  = genes_edgeR,
+    limma  = genes_limma
+  )
+  
+  # Nettoyage : retirer NA + doublons
+  gene_lists <- lapply(gene_lists, function(x) {
+    unique(na.omit(x))
+  })
+  
+  # --- Calcul gènes communs ---
+  common_genes <- Reduce(intersect, gene_lists)
+  
+  cat("\n=== Venn diagram summary === \n")
+  print(sapply(gene_lists, length))
+  cat("\n=== Common genes to all methods:", length(common_genes), " ===\n")
+
+  
+  # --- Plot Venn ---
+  p <- ggVennDiagram(gene_lists, label_alpha = 0) +
+    scale_fill_gradient(low = low_color, high = high_color) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      plot.margin = margin(1, 1, 1, 1, "cm")
+    ) +
+    labs(title = title)
+  
+  plot2pdf(
+    p,
+    file.path(out_dir, file_name),
+    width = width,
+    height = height
+  )
+  
+  # --- Retourner les gènes communs ---
+  return(common_genes)
+}
+
+# --- combinelfc ---
+combinelfc <-function(
+                      lfc_manual,
+                      lfc_DESeq2,
+                      lfc_edgeR,
+                      lfc_limma,
+                      annot_fun = annotgenes,
+                      label_fun = ensurelabel
+                      ) {
+  
+  # Sélection et renommage des colonnes
+  lfc_manual_sel <- lfc_manual %>% dplyr::select(gene_id, logFC_manual = logFC)
+  lfc_DESeq2_sel <- lfc_DESeq2 %>% dplyr::select(gene_id, logFC_DESeq2 = log2FoldChange)
+  lfc_edgeR_sel   <- lfc_edgeR %>% dplyr::select(gene_id, logFC_QLF = logFC)
+  lfc_limma_sel   <- lfc_limma %>% dplyr::select(gene_id, logFC_limma = logFC)
+  
+  # Fusion complète par gene_id
+  combined_lfc <- lfc_manual_sel %>%
+    full_join(lfc_DESeq2_sel, by = "gene_id") %>%
+    full_join(lfc_edgeR_sel, by = "gene_id") %>%
+    full_join(lfc_limma_sel, by = "gene_id")
+  
+  # Mettre gene_id en rownames et supprimer la colonne
+  rownames(combined_lfc) <- combined_lfc$gene_id
+  combined_lfc$gene_id <- NULL
+  
+  # Annoter et s'assurer des labels
+  combined_annot <- annot_fun(combined_lfc, rownames(combined_lfc))
+  combined_annot <- label_fun(combined_annot)
+  
+  return(combined_annot)
+}
+
+# --- pcaward ---
+pcaward <- function(expr_mat, k, scale = TRUE) {
+  
+  # PCA
+  pca <- prcomp(t(expr_mat), scale. = scale)
+  
+  # Clustering Ward
+  d <- dist(pca$x)
+  hc <- hclust(d, method = "ward.D2")
+  clusters <- cutree(hc, k = k)
+  
+  # Dataframe prêt à ploter
+  df_pca <- data.frame(
+    sample = rownames(pca$x),
+    PC1 = pca$x[, 1],
+    PC2 = pca$x[, 2],
+    PC3 = pca$x[, 3],
+    cluster = factor(clusters)
+  )
+  
+  list(
+    pca = pca,
+    hc = hc,
+    clusters = clusters,
+    df = df_pca
+  )
+}
+
+# --- plotpca ---
+plotpca <- function(
+                    df_pca,
+                    title,
+                    palette = "Set1",
+                    out_file,
+                    width = 6,
+                    height = 5
+                    ) {
+  # pourcentage de variance expliquée
+  var_exp <- summary(df_pca$pca)$importance["Proportion of Variance", ] * 100
+
+  p <- ggplot(df_pca$df, aes(PC1, PC2, color = cluster, label = sample)) +
+    geom_point(size = 3) +
+    geom_text(vjust = -0.8, size = 3) +
+    theme_minimal() +
+    theme(
+      legend.position = "none"
+    ) +
+    labs(
+      title = title,
+      x = sprintf("PC1 (%.1f%%)", var_exp[1]),
+      y = sprintf("PC2 (%.1f%%)", var_exp[2])
+    ) +
+    scale_color_brewer(palette = palette)
+    
+  plot2pdf(p, out_file, width, height)
+}
+
+# --- plotpca3 ---
+plotpca3 <- function(
+                    df_pca,
+                    title,
+                    out_file,
+                    width = 6,
+                    height = 5
+                    ) {
+  
+  # Pourcentage de variance expliquée
+  var_exp <- summary(df_pca$pca)$importance["Proportion of Variance", ] * 100
+  
+  # Définir des formes différentes pour les clusters
+  n_clusters <- length(unique(df_pca$df$cluster))
+  shapes <- c(16, 15, 17, 3)  # 16 =cercle, 15 =carré, 17 =triangle, 8 =étoile, 18 =diamant, 3 =+
+  if(n_clusters > length(shapes)) {
+    warning("Plus de clusters que de formes disponibles, certaines se répéteront")
+    shapes <- rep(shapes, length.out = n_clusters)
+  }
+  cluster_shapes <- setNames(shapes[1:n_clusters], levels(df_pca$df$cluster))
+  
+  # Normalisation PC3 pour gradient perceptible
+  pc3_values <- df_pca$df$PC3
+  pc3_mid <- median(pc3_values, na.rm = TRUE)
+  pc3_min <- min(pc3_values, na.rm = TRUE)
+  pc3_max <- max(pc3_values, na.rm = TRUE)
+  
+  # Construire le plot
+  p <- ggplot(df_pca$df, aes(x = PC1, y = PC2, shape = cluster, color = PC3, label = sample)) +
+    geom_point(size = 3) +
+    geom_text(vjust = -0.8, size = 3) +
+    scale_shape_manual(values = cluster_shapes) +
+    scale_color_gradient2(
+      low = "blue",
+      mid = "bisque",
+      high = "red",
+      midpoint = pc3_mid,
+      limits = c(pc3_min, pc3_max),
+      name = sprintf("PC3 (%.1f%%)", var_exp[3])
+    ) +
+    theme_minimal() +
+    labs(
+      title = title,
+      x = sprintf("PC1 (%.1f%%)", var_exp[1]),
+      y = sprintf("PC2 (%.1f%%)", var_exp[2])
+    ) +
+    theme(
+      legend.position = "right",
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 9)
+    )
+  
+  # Export PDF
+  plot2pdf(p, out_file, width, height)
+}
+
+# --- plot Ward clustering ---
+plotward <- function(
+                     hc,
+                     title = "Ward Clustering Dendrogram",
+                     out_file,
+                     width = 6,
+                     height = 5
+                     ) {
+  dend_data <- dendro_data(as.dendrogram(hc), type = "rectangle")
+  
+  p <- ggplot() +
+    geom_segment(data = dend_data$segments, 
+                 aes(x = x, y = y, xend = xend, yend = yend)) +
+    geom_text(data = dend_data$labels, 
+              aes(x = x, y = y, label = label), 
+              angle = 65, hjust = 1, size = 3) +
+    theme_minimal() +
+    scale_y_continuous(expand = expansion(mult = c(0.2, 0.05))) +
+    labs(title = title, x = "", y = "Height")
+  
+  plot2pdf(p, out_file, width, height)
+}
+
+# --- topamp ---
+topamp <- function(expr_mat, topN) {
+  
+  gene_amp <- apply(expr_mat, 1, function(x) max(x) - min(x))
+  
+  names(sort(gene_amp, decreasing = TRUE))[1:min(topN, length(gene_amp))]
+}
+
+# --- gettrajectory ---
+gettrajectory <- function(expr_mat, genes) {
+  
+  df <- as.data.frame(t(expr_mat[genes, , drop = FALSE]))
+  df$timepoint <- factor(colnames(expr_mat), levels = colnames(expr_mat))
+  
+  reshape2::melt(df, id.vars = "timepoint")
+}
+
+# --- plottrajectory ---
+plottrajectories <- function(
+                             df_long,
+                             title,
+                             out_file,
+                             width = 10,
+                             height = 7,
+                             smooth = TRUE
+                             ) {
+  
+  p <- ggplot(df_long,
+              aes(x = as.numeric(timepoint),
+                  y = value,
+                  group = variable,
+                  color = variable)) +
+    geom_point() +
+    geom_line()
+  
+  if (smooth) {
+    p <- p + geom_smooth(method = "loess", se = FALSE)
+  }
+  
+  p <- p +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    labs(
+      x = "Timepoint (ordered)",
+      y = "log2 CPM",
+      title = title
+    )
+  
+  plot2pdf(p, out_file, width = width, height = height)
+}
+````
+=== Two Timepoints Analysis
+==== Parameters
+````r
+{r}
+# ---
+# Paramètres
+# ---
+gtf_file <- "Data/reference/Caenorhabditis_elegans.WBcel235.115.gtf.gz"
+tx2gene_file <- "Results/quants/tx2gene.tsv"  # créé depuis GTF
+samples_file <- "Data/metadata/samples.tsv"
+quant_dir <- "Results/quants/salmon"
+out_dir <- "Results/DESeqDataSet"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+lfc_thresh <- 4
+````
+==== Analysis
+````typ
+{r}
+# ---
+# Prepare Data DESeq2
+# ---
+
+# --- gtf2tx2gene ---
+tx2gene <- gtf2tx2gene(gtf_file)
+debug(tx2gene)
+write.table(tx2gene, tx2gene_file, sep="\t", quote=FALSE, row.names=FALSE)
+
+# --- meta2coldata ---
+coldata <- meta2coldata(samples_file)
+debug(coldata)
+
+# --- buildquant ---
+files <- buildquant(quant_dir, coldata)
+debug(files)
+
+txi <- tximport(files, type = "salmon", tx2gene = tx2gene, countsFromAbundance = "lengthScaledTPM")
+debug(txi$abundance)
+debug(txi$counts)
+debug(txi$length)
+
+# --- builddds ---
+# Définir les deux timepoints d'intérêt
+timepoints <- c("t_900min", "t_510min")
+dds <- builddds(
+                txi = txi,
+                coldata = coldata,
+                timepoint_col = "timepoint",
+                timepoints = c("t_510min", "t_900min"),
+                design_formula = ~ timepoint,
+                min_count = 1, 
+                min_samples = 1
+                )
+debug(dds)
+
+# ---
+# 2 timepoints analysis manual
+# ---
+
+# --- computelfc ---
+res <- computelfc(dds)
+lfc_table <- res$lfc_table
+norm_counts <- res$norm_counts
+
+debug(lfc_table)
+
+# --- annotgenes ---
+lfc_annot <- annotgenes(lfc_table, rownames(norm_counts))
+lfc_annot <- ensurelabel(lfc_annot)
+debug(lfc_annot)
+
+# --- makedir ---
+makedir(paste0(out_dir, "/barplot/manual"))
+
+# --- plotlfc ---
+plotlfc(
+        lfc_annot, 
+        paste0(out_dir, "/barplot/manual"),
+        lfc_thresh,
+        suffix = "manual",
+        colname = "logFC"
+        )
+
+# counts simulés
+counts_sim <- simulatecounts(dds, nrep = 3, bcv = 0.2, seed = 12345)
+
+# reconstruire colData pour les nouveaux échantillons
+coldata_sim <- data.frame(
+                          timepoint = rep(colData(dds)$timepoint, each = 3),
+                          replicate = rep(1:3, times = ncol(dds)),
+                          row.names = colnames(counts_sim)
+                          )
+
+# créer le DESeqDataSet simulé
+dds_sim <- DESeqDataSetFromMatrix(
+                                  countData = counts_sim,
+                                  colData = coldata_sim,
+                                  design = ~ timepoint
+                                  )
+
+# créer un facteur 'condition' basé sur tes timepoints simulés
+dds_sim$condition <- dds_sim$timepoint  
+
+dds_sim$condition <- relevel(dds_sim$condition, ref = "t_510min")
+
+design(dds_sim) <- ~ condition
+
+dds_sim <- DESeq(dds_sim)
+
+resultsNames(dds_sim)
+
+res_deseq2 <- results(dds_sim, contrast = c('condition', "t_900min", "t_510min"), alpha = 0.05)
+
+res_deseq2 <- as.data.frame(res_deseq2) 
+res_deseq2 <- res_deseq2[res_deseq2$baseMean > 1, ] 
+res_deseq2 <- res_deseq2[!is.na(res_deseq2$padj), ]
+
+DESeq2_DEGup <- res_deseq2[res_deseq2$padj < 0.05 & res_deseq2$log2FoldChange > 1, ] 
+DESeq2_DEGdown <- res_deseq2[res_deseq2$padj < 0.05 & res_deseq2$log2FoldChange < -1, ] 
+DEGs_deseq2 <- rbind(DESeq2_DEGup, DESeq2_DEGdown)
+
+# --- annotgenes ---
+deseq2_annot <- annotgenes(res_deseq2, rownames(res_deseq2))
+deseq2_annot <- ensurelabel(deseq2_annot)
+debug(deseq2_annot)
+
+# --- makedir ---
+makedir(paste0(out_dir, "/volcanoplot"))
+
+# --- plotvolcano ---
+plotvolcano(
+            volcano_df = deseq2_annot, 
+            paste0(out_dir, "/volcanoplot"), 
+            "volcano_DESeq2_sim.pdf",
+            lfc_thresh = 4,
+            x = "log2FoldChange", 
+            y = "padj", 
+            label = "external_gene_name"
+            )
+
+# --- makedir ---
+makedir(paste0(out_dir, "/barplot/DESeq2_sim"))
+
+# --- plotlfc ---
+plotlfc(
+        deseq2_annot, 
+        paste0(out_dir, "/barplot/DESeq2_sim"),
+        lfc_thresh,
+        suffix = "DESeq2",
+        colname = "log2FoldChange"
+        )
+
+write.csv(deseq2_annot, file.path(out_dir, "DESeq2_sim.tsv"))
+write.csv(lfc_annot, file.path(out_dir, "lfc_manual.tsv"))
+````
+=== Whole Timepoints analysis
+==== Parameters
+````r
+{r}
+# ---
+# Paramètres 
+# ---
+out_dir <- "Results/DGElist"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# edgeR params (pris de RAPTOR.yaml)
+min_count <- 10 #nb minimal de lectures pour considérer un gène comme exprimé
+min_total_count <- 15 #nb minimal de lectures au total dans tous les échantillons pour être considéré
+min_prop <- 0.07139 #le gène doit être exprimé dans 70% des échantillons (ex: 10t/14t) => trop exigeant ici #TODO: retirer ||Mais dans une analyses continue un gène "on/off" est "peu intéréssant" => dépend de ce qui est recherché. Découverte d'expression "sporadique" ou tendance d'expression générale des gènes le plus souvent exprimés || corrigé ici pour 7,139% ~ 1t/14t 
+prior_count <- 2
+normalization_method <- "TMM" # TMM, upperquartile
+
+fdr_thresh <- 0.05 #vérifier valeur et tenter de trouver une valeur intéréssante
+````
+=== Analysis
+````r
+{r}
+# ---
+# Prepare Data EdgeR/limma
+# ---
+
+# --- buildDGEList ---
+y <- buildDGEList(txi$counts, coldata)
+debug(y)
+
+# --- filterlow ---
+y <- filterlow(y, min_total_count, min_prop)
+
+# --- normalizeDGElist ---
+y <- normalizeDGElist(y, normalization_method)
+
+# ---
+# 2 timepoints analysis
+# ---
+
+# --- cpm --- 
+logCPM <- cpm(y, log = TRUE, prior.count = prior_count)
+debug(logCPM)
+
+# === glmQLFit avec simulation ===
+# --- simulatecounts ---
+sim_counts <- simulatecounts(y$counts, nrep = 3, bcv = 0.2, seed = 123)
+debug(sim_counts)
+
+# --- edgeRQLF ---
+fit_qlf <- edgeRQLF(orig_counts = sim_counts, bcv = 0.2)
+debug(fit_qlf)
+
+# Contraste
+contrast <- makeContrasts(t510_vs_t900 = t_900min - t_510min, levels = fit_qlf$design)
+qlf_test <- glmQLFTest(fit_qlf, contrast = contrast)
+  
+# Résultats
+res_qlf <- topTags(qlf_test, n = Inf, sort.by = "none")$table
+debug(res_qlf)
+
+edgeR_DEGup <- res_qlf[res_qlf$FDR < 0.05 & res_qlf$logFC > 1, ]
+edgeR_DEGdown <- res_qlf[res_qlf$FDR < 0.05 & res_qlf$logFC < -1, ]
+DEGs_edgeR <- rbind(edgeR_DEGup, edgeR_DEGdown)
+
+qlf_annot <- annotgenes(res_qlf, rownames(res_qlf))
+qlf_annot <- ensurelabel(qlf_annot)
+
+# --- makedir ---
+makedir(paste0(out_dir, "/volcanoplot"))
+
+# --- plotvolcano ---
+plotvolcano(
+            volcano_df = qlf_annot,
+            paste0(out_dir, "/volcanoplot"), 
+            "volcano_glmQLF_sim.pdf",
+            lfc_thresh = 4,
+            x = "logFC", 
+            y = "FDR", 
+            label = "external_gene_name"
+            )
+
+# --- makedir ---
+makedir(paste0(out_dir, "/barplot/glmQLF"))
+
+# --- plotlfc ---
+plotlfc(
+        qlf_annot,
+        paste0(out_dir, "/barplot/glmQLF"),
+        lfc_thresh = lfc_thresh,
+        suffix = "edgeR_glmQLF",
+        colname = "logFC"
+        )
+
+# === limma model fit avec simulation ===
+# --- limmabayes ---
+res_limma <- limmabayes(orig_counts = sim_counts)
+
+contrast <- makeContrasts(t510_vs_t900 = t_900min - t_510min, levels = res_limma$design)
+fit2 <- contrasts.fit(res_limma, contrast)
+fit2 <- eBayes(fit2)
+
+diff_limma <- topTable(fit2, number = Inf, sort.by = "none", adjust = "fdr")
+
+# Identify significant DEGs 
+limma_DEGup <- diff_limma[diff_limma$adj.P.Val < 0.05 & diff_limma$logFC > 1, ] 
+limma_DEGdown <- diff_limma[diff_limma$adj.P.Val < 0.05 & diff_limma$logFC < -1, ] 
+DEGs_limma <- rbind(limma_DEGup, limma_DEGdown)
+
+limma_annot <- annotgenes(diff_limma, rownames(diff_limma))
+limma_annot <- ensurelabel(limma_annot)
+
+# --- makedir ---
+makedir(paste0(out_dir, "/volcanoplot"))
+
+# --- plotvolcano ---
+plotvolcano(
+            volcano_df = limma_annot,
+            paste0(out_dir, "/volcanoplot"), 
+            "volcano_limma_sim.pdf",
+            lfc_thresh = 4,
+            x = "logFC", 
+            y = "adj.P.Val", 
+            label = "external_gene_name"
+            )
+
+# --- makedir ---
+makedir(paste0(out_dir, "/barplot/limma"))
+
+# ---  plotlfc ---
+plotlfc(
+        limma_annot,
+        paste0(out_dir, "/barplot/limma"),
+        lfc_thresh = lfc_thresh,
+        suffix = "limma_logFC",
+        colname = "logFC"
+        )
+
+# === comparaison des models === 
+# --- makedir ---
+makedir(paste0(out_dir, "/comparaison"))
+
+# --- comparaison manual vs DESeq2  --- 
+compare_df <- comparelfccpm(lfc_annot, "Manual", deseq2_annot, "DESeq2", "gene_id", "logFC", "log2FoldChange", out_dir = paste0(out_dir, "/comparaison"), method = "spearman")
+
+
+# --- comparaison manual vs edgeR strict ---
+compare_df <- comparelfccpm(lfc_annot, "Manual", qlf_annot, "EdgeR", "gene_id", "logFC", "logFC", out_dir = paste0(out_dir, "/comparaison"), method = "spearman")
+
+# --- comparaison manual vs limma strict ---
+compare_df <- comparelfccpm(lfc_annot, "Manual", limma_annot, "limma", "gene_id", "logFC", "logFC", out_dir = paste0(out_dir, "/comparaison"), method = "spearman")
+
+# --- makedir ---
+makedir(paste0(out_dir, "/venndiagram"))
+
+# --- comparaison 3 ---
+common_genes <- plotvenn(
+                         DEGs_deseq2 = DEGs_deseq2,
+                         DEGs_edgeR = DEGs_edgeR,
+                         DEGs_limma = DEGs_limma,
+                         out_dir = paste0(out_dir, "/venndiagram")
+                         )
+
+combined_annot <- combinelfc(lfc_annot, deseq2_annot, qlf_annot, limma_annot)
+
+write.csv(qlf_annot, file.path(out_dir, "DESeq2_sim.tsv"))
+write.csv(limma_annot, file.path(out_dir, "DESeq2_sim.tsv"))
+write.csv(combined_annot, file.path(out_dir, "combined_lfc.tsv"))
+
+paper_table <- combined_annot[2:6]
+paper_table <- head(paper_table, 10)
+paper_table$gene_name <- paper_table$external_gene_name
+paper_table$external_gene_name <- NULL
+paper_table[1:4] <- round(paper_table[1:4], 3)
+write.csv(paper_table, file.path(out_dir, "paper_table.csv"))
+# ---
+# whole timepoints analysis
+# ---
+
+# === pca + ward clustering ===
+# --- pcaward -- #TODO: rajouter un plotward
+pca_res <- pcaward(logCPM, k = 4)
+debug(pca_res$pca)
+debug(pca_res$hc)
+debug(pca_res$clusters)
+debug(pca_res$df)
+
+# --- makedir ---
+makedir(paste0(out_dir, "/pca"))
+
+# --- plotpca ---
+plotpca(
+        pca_res, 
+        title = "PCA of timepoints (logCPM, Ward clustering)", 
+        out_file = file.path(paste0(out_dir, "/pca"), "PCA_timepoints_ward_clusters.pdf")
+        )
+
+# --- plotpca ---
+plotpca3(
+        pca_res, 
+        title = "PCA of timepoints (logCPM, Ward clustering)", 
+        out_file = file.path(paste0(out_dir, "/pca"), "PCA3_timepoints_ward_clusters.pdf")
+        )
+
+# --- plotward ---
+plotward(
+         pca_res$hc,
+         title = "Dendrogramme Ward",
+         out_file = file.path(paste0(out_dir, "/pca"), "ward_clustering.pdf")
+         )
+
+# === genes trajectories analysis ===
+# === top100 ===
+# --- topamp ---
+top100 <- topamp(logCPM, topN = 100)
+
+# --- gettrajectory ---
+df_long_100 <- gettrajectory(logCPM, top100)
+
+# --- makedir ---
+makedir(paste0(out_dir, "/trajectoryplot"))
+
+# --- plottrajcetories ---
+plottrajectories(
+                 df_long_100,
+                 title = "Top 100 genes by amplitude",
+                 out_file = file.path(paste0(out_dir, "/trajectoryplot"), "top100_trajectories.pdf")
+                 )
+
+# === top500 ===
+# --- topamp ---
+top500 <- topamp(logCPM, topN = 500)
+
+# --- gettrajectory ---
+df_long_500 <- gettrajectory(logCPM, top500)
+
+# === t900 ===
+values_t900 <- df_long_500[df_long_500$timepoint == levels(df_long_500$timepoint)[1], ]
+low_t900_genes  <- values_t900$variable[values_t900$value < 6]
+high_t900_genes <- values_t900$variable[values_t900$value >= 6]
+
+df_low  <- df_long_500[df_long_500$variable %in% low_t900_genes, ]
+df_high <- df_long_500[df_long_500$variable %in% high_t900_genes, ]
+
+# === t900 < 6 && t510 > 6 ===
+values_t510 <- df_long_500[df_long_500$timepoint == levels(df_long_500$timepoint)[14], ]
+
+high_later_genes <- values_t510$variable[values_t510$value >= 6]
+low_later_genes  <- setdiff(low_t900_genes, high_later_genes)
+
+df_low_later_high <- df_low[df_low$variable %in% high_later_genes, ]
+df_low_later_low  <- df_low[df_low$variable %in% low_later_genes, ]
+
+# --- plottrajectories ---
+# === t900 < 6 ===
+plottrajectories(
+  df_low,
+  title = "Top genes (t900 < 6)",
+  out_file = file.path(paste0(out_dir, "/trajectoryplot"), "top500_trajectories_t900_low.pdf")
+)
+
+# === t900 < 6 && t510 >= 6 ===
+plottrajectories(
+  df_low_later_high,
+  title = "Genes t900 < 6 and t510 >= 6",
+  out_file = file.path(paste0(out_dir, "/trajectoryplot"), "top500_trajectories_t900low_t510high.pdf")
+)
+
+# === t900 < 6 && t510 < 6 ===
+plottrajectories(
+  df_low_later_low,
+  title = "Genes t900 < 6 and t510 < 6",
+  out_file = file.path(paste0(out_dir, "/trajectoryplot"), "top500_trajectories_t900low_t510low.pdf")
+)
+
+# === t900 >= 6 ===
+plottrajectories(
+  df_high,
+  title = "Top genes (t900 >= 6)",
+  out_file = file.path(paste0(out_dir, "/trajectoryplot"), "top500_trajectories_t900_high.pdf")
+)
+
+# === Correlation matrix === # à verifier 
+# === Correlation des logCPM === # problème : biaisé par les gènes fortement exprimés
+# --- makedir ---
+makedir(paste0(out_dir, "/heatmap"))
+
+cor_mat <- cor(logCPM, method = "pearson")
+
+dist_mat <- dist(t(logCPM))
+
+p <- pheatmap(cor_mat, cluster_rows = hclust(dist_mat, method = "ward.D2"), cluster_cols = hclust(dist_mat, method = "ward.D2"), main = "Correlation matrix (logCPM)")
+# --- plot2pdf ---
+plot2pdf(
+         p,
+         file.path(paste0(out_dir, "/heatmap"), "timepoint_correlation.pdf"), 
+         width=7, 
+         height=6
+         )
+
+# === Z-score === #TODO: apparemment la fonction coolmap(logCPM) fait la même chose directement
+zlogCPM <- t(scale(t(logCPM)))
+write.csv(as.data.frame(zlogCPM), file.path(out_dir, "zscore_logCPM.csv"), row.names = TRUE)
+
+cor_mat <- cor(zlogCPM, method = "pearson")
+dist_mat <- dist(t(zlogCPM))
+
+p <- pheatmap(cor_mat, cluster_rows = hclust(dist_mat, method = "ward.D2"), cluster_cols = hclust(dist_mat, method = "ward.D2"), main = "Correlation matrix (zlogCPM)")
+# --- plot2pdf ---
+plot2pdf(
+         p,
+         file.path(paste0(out_dir, "/heatmap"), "timepoint_zcorrelation.pdf"), 
+         width=7, 
+         height=6
+         )
+
+# === Heatmap top 500 variable genes ===
+topN <- 500 #changement de groupe observé pour t_810, peut indiquer que les gènes t_810 les "plus variables" sont proches de ceux de 900:840 
+var_genes <- order(apply(logCPM, 1, var), decreasing = TRUE)[1:min(topN, nrow(logCPM))]
+
+row_dist <- dist(zlogCPM[var_genes, , drop = FALSE])
+col_dist <- dist(t(zlogCPM[var_genes, , drop = FALSE]))
+
+p <- pheatmap(zlogCPM[var_genes, , drop=FALSE], cluster_rows = hclust(row_dist, method = "ward.D2"), cluster_cols = hclust(col_dist, method = "ward.D2"), show_rownames = FALSE, main = sprintf("Top %d variable genes (z-scored logCPM)", length(var_genes)))
+
+# --- plot2pdf ---
+plot2pdf(
+         p,
+         file.path(paste0(out_dir, "/heatmap"), "heatmap_top_variable_genes.pdf"), 
+         width=7, 
+         height=6
+         )
+
+message("Pipeline finished. Results in: ", out_dir)
+````
+
+
